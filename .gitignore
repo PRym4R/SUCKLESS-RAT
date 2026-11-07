@@ -1,0 +1,29 @@
+# Build outputs
+*.exe
+*.o
+*.obj
+*.dll
+*.pdb
+
+# Certificates (NEVER commit — even self-signed ones)
+*.pfx
+*.pem
+*.key
+*.crt
+!cert.pfx.example
+
+# Downloads from the file manager
+downloads/
+
+# Editor / OS cruft
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Wine junk
+*.tmp
+dosdevices/
+drive_c/
