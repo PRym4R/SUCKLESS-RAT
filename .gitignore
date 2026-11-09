@@ -5,25 +5,29 @@
 *.dll
 *.pdb
 
-# Certificates (NEVER commit — even self-signed ones)
+# Certificates and keys - never commit
 *.pfx
 *.pem
 *.key
 *.crt
-!cert.pfx.example
 
-# Downloads from the file manager
+# Runtime downloads
 downloads/
+
+# Local notes and stray copies
+.ideas
+*.orig
+*.bak
+*~
 
 # Editor / OS cruft
 .vscode/
 .idea/
 *.swp
-*~
 .DS_Store
 Thumbs.db
 
-# Wine junk
+# Wine
 *.tmp
 dosdevices/
 drive_c/
