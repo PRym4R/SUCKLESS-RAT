@@ -2,10 +2,11 @@
 #include <windows.h>
 #include <stdint.h>
 #include <stdlib.h>
-static inline void WriteFileAll(const char* p, const void* d, uint32_t n) {
+static inline bool WriteFileAll(const char* p, const void* d, uint32_t n) {
   HANDLE f = CreateFileA(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
-  if (f == INVALID_HANDLE_VALUE) return;
-  DWORD w; WriteFile(f, d, n, &w, NULL); CloseHandle(f);
+  if (f == INVALID_HANDLE_VALUE) return false;
+  DWORD w = 0; BOOL ok = WriteFile(f, d, n, &w, NULL); CloseHandle(f);
+  return ok && w == n;
 }
 static inline char* ReadFileAll(const char* p, uint32_t* outLen) {
   *outLen = 0;

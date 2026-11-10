@@ -26,7 +26,8 @@ static HCERTSTORE g_store;
 static bool LoadPfx(const char* path) {
   HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
   if (f == INVALID_HANDLE_VALUE) return false;
-  DWORD sz = GetFileSize(f, NULL), n = 0; BYTE* data = (BYTE*)malloc(sz);
+  DWORD sz = GetFileSize(f, NULL), n = 0; if (sz == INVALID_FILE_SIZE || !sz) { CloseHandle(f); return false; }
+  BYTE* data = (BYTE*)malloc(sz);
   if (!data) { CloseHandle(f); return false; }
   ReadFile(f, data, sz, &n, NULL); CloseHandle(f); if (n != sz) { free(data); return false; }
   CRYPT_DATA_BLOB blob = { sz, data };
@@ -49,10 +50,10 @@ static char* Crlf(const char* s) {
   for (size_t i = 0; i < n; i++) { if (s[i] == '\n' && (i == 0 || s[i - 1] != '\r')) t[j++] = '\r'; t[j++] = s[i]; }
   t[j] = 0; return t;
 }
-static int FindClientIndex(Client* c) {
-  EnterCriticalSection(&g_cs); int r = -1;
-  for (int i = 0; i < g_clientCount; i++) if (g_clients[i] == c) { r = i; break; }
-  LeaveCriticalSection(&g_cs); return r;
+static int RowOf(Client* c) {
+  LVITEMA it = {0}; it.mask = LVIF_PARAM;
+  for (int i = 0, n = ListView_GetItemCount(g_list); i < n; i++) { it.iItem = i; if (ListView_GetItem(g_list, &it) && (Client*)it.lParam == c) return i; }
+  return -1;
 }
 static Client* ClientAt(int idx) {
   if (idx < 0) return NULL;
@@ -60,15 +61,15 @@ static Client* ClientAt(int idx) {
   return ListView_GetItem(g_list, &it) ? (Client*)it.lParam : NULL;
 }
 static void RefreshRow(Client* c) {
-  int i = FindClientIndex(c); if (i < 0) return; ListView_SetItemText(g_list, i, 0, c->host); ListView_SetItemText(g_list, i, 1, c->user);
+  int i = RowOf(c); if (i < 0) return; ListView_SetItemText(g_list, i, 0, c->host); ListView_SetItemText(g_list, i, 1, c->user);
   ListView_SetItemText(g_list, i, 2, c->os); ListView_SetItemText(g_list, i, 3, c->country);
 }
 static void FinalizeClient(Client* c) {
   EnterCriticalSection(&g_cs);
   if (c->tls.sock != INVALID_SOCKET) closesocket(c->tls.sock);
-  int i = -1; for (int k = 0; k < g_clientCount; k++) if (g_clients[k] == c) { i = k; break; }
-  if (i >= 0) { ListView_DeleteItem(g_list, i); g_clients[i] = g_clients[--g_clientCount]; }
+  for (int i = 0; i < g_clientCount; i++) if (g_clients[i] == c) { g_clients[i] = g_clients[--g_clientCount]; break; }
   LeaveCriticalSection(&g_cs);
+  int r = RowOf(c); if (r >= 0) ListView_DeleteItem(g_list, r);
   for (int k = 0; k < K_COUNT; k++) if (c->wnd[k]) DestroyWindow(c->wnd[k]);
   free(c->shotBmp); FreeTlsCtx(&c->tls); free(c);
 }
@@ -91,26 +92,30 @@ static void FillFiles(Client* c, char* pl, uint32_t plLen) {
   }
   char* line = pl; char* end = pl + plLen; int i = 0;
   while (line < end) {
-    char* nl = strchr(line, '\n'); if (!nl) break; *nl = 0;
+    char* nl = strchr(line, '\n'); if (nl) *nl = 0;
     char* p1 = strchr(line, '|');
     if (p1) {
       *p1 = 0; LVITEMA it = {0}; it.mask = LVIF_TEXT; it.iItem = i; it.pszText = line;
       int idx = ListView_InsertItem(lv, &it); ListView_SetItemText(lv, idx, 1, p1 + 1); i++;
     }
-    line = nl + 1;
+    if (!nl) break; line = nl + 1;
   }
 }
 static void SaveFile(Client* c, const char* pl, uint32_t plLen) {
   if (!c->wnd[K_FILES] || !plLen) return;
   CreateDirectoryA("downloads", NULL);
-  char name[MAX_PATH]; strcpy(name, c->shellPending);
-  char* slash = strrchr(name, '\\'); if (!slash) slash = strrchr(name, '/');
-  if (slash) strcpy(name, slash + 1); if (!name[0]) strcpy(name, "last.bin");
-  char outPath[MAX_PATH + 16]; sprintf(outPath, "downloads\\%s", name);
-  WriteFileAll(outPath, pl, plLen); MessageBoxA(c->wnd[K_FILES], outPath, "Saved", MB_ICONINFORMATION);
+  char name[MAX_PATH]; snprintf(name, sizeof(name), "%s", c->shellPending[0] ? c->shellPending : "last.bin");
+  char outPath[MAX_PATH + 16]; snprintf(outPath, sizeof(outPath), "downloads\\%s", name);
+  if (WriteFileAll(outPath, pl, plLen)) MessageBoxA(c->wnd[K_FILES], outPath, "Saved", MB_ICONINFORMATION);
+  else MessageBoxA(c->wnd[K_FILES], "Write failed", "Save", MB_ICONERROR);
 }
 static DWORD WINAPI ClientThread(LPVOID p) {
   Client* c = (Client*)p;
+  if (!TlsAcquire(&c->tls, g_cert) || !TlsHandshake(&c->tls)) { closesocket(c->tls.sock); FreeTlsCtx(&c->tls); free(c); return 0; }
+  EnterCriticalSection(&g_cs);
+  bool ok = g_clientCount < 256; if (ok) g_clients[g_clientCount++] = c;
+  LeaveCriticalSection(&g_cs);
+  if (!ok) { closesocket(c->tls.sock); FreeTlsCtx(&c->tls); free(c); return 0; }
   uint16_t cmd = 0; char* pl = NULL; uint32_t plLen = 0;
   for (;;) {
     if (!TlsRecvMsg(&c->tls, &cmd, &pl, &plLen)) break;
@@ -139,7 +144,7 @@ static DWORD WINAPI ClientThread(LPVOID p) {
     if (pl) free(pl);
   }
 out:
-  if (!PostMessageA(g_main, WM_CLIENT_GONE, 0, (LPARAM)c)) FinalizeClient(c);
+  PostMessageA(g_main, WM_CLIENT_GONE, 0, (LPARAM)c);
   return 0;
 }
 static DWORD WINAPI AcceptThread(LPVOID) {
@@ -148,12 +153,8 @@ static DWORD WINAPI AcceptThread(LPVOID) {
     if (s == INVALID_SOCKET) break;
     Client* c = (Client*)calloc(1, sizeof(Client));
     if (!c) { closesocket(s); continue; }
-    InitTlsCtx(&c->tls, s);
-    if (!TlsAcquire(&c->tls, g_cert) || !TlsHandshake(&c->tls)) { closesocket(s); free(c); continue; }
-    EnterCriticalSection(&g_cs);
-    if (g_clientCount < 256) g_clients[g_clientCount++] = c;
-    LeaveCriticalSection(&g_cs);
-    if (!CreateThread(NULL, 0, ClientThread, c, 0, NULL)) PostMessageA(g_main, WM_CLIENT_GONE, 0, (LPARAM)c);
+    InitTlsCtx(&c->tls, s); HANDLE th = CreateThread(NULL, 0, ClientThread, c, 0, NULL);
+    if (th) CloseHandle(th); else { closesocket(s); FreeTlsCtx(&c->tls); free(c); }
   }
   return 0;
 }
@@ -209,14 +210,23 @@ static void ChildCommand(Client* c, int kind, HWND h, int id) {
     if (sel < 0) return;
     ListView_GetItemText(GetDlgItem(h, 1), sel, 0, name, sizeof(name));
     char p[MAX_PATH]; GetWindowTextA(GetDlgItem(h, IDC_FPATH), p, sizeof(p));
-    char full[MAX_PATH * 2 + 2]; sprintf(full, "%s\\%s", p, name);
-    strcpy(c->shellPending, full);
+    char full[MAX_PATH * 2 + 2]; snprintf(full, sizeof(full), "%s\\%s", p, name);
+    snprintf(c->shellPending, sizeof(c->shellPending), "%s", name);
     TlsSendMsg(&c->tls, C_FS_GET, full, strlen(full));
   }
 }
+static bool BmpOk(Client* c) {
+  if (!c->shotBmp || c->shotBmpLen < sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER)) return false;
+  BITMAPFILEHEADER* fh = (BITMAPFILEHEADER*)c->shotBmp; BITMAPINFOHEADER* ih = (BITMAPINFOHEADER*)(c->shotBmp + sizeof(*fh));
+  if (fh->bfType != 0x4D42 || ih->biSize < sizeof(BITMAPINFOHEADER) || fh->bfOffBits < sizeof(*fh) + ih->biSize) return false;
+  int w = ih->biWidth, h = ih->biHeight < 0 ? -ih->biHeight : ih->biHeight;
+  if (w <= 0 || h <= 0 || w > 16384 || h > 16384 || ih->biBitCount < 1 || ih->biBitCount > 32) return false;
+  uint64_t row = ((uint64_t)w * ih->biBitCount + 31) / 32 * 4;
+  return fh->bfOffBits + row * h <= c->shotBmpLen;
+}
 static void ChildPaint(Client* c, HWND h) {
   PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
-  if (c && c->shotBmp && c->shotBmpLen > sizeof(BITMAPFILEHEADER)) {
+  if (c && BmpOk(c)) {
     BITMAPFILEHEADER* fh = (BITMAPFILEHEADER*)c->shotBmp;
     BITMAPINFO* bi = (BITMAPINFO*)(c->shotBmp + sizeof(*fh));
     void* px = (void*)(c->shotBmp + fh->bfOffBits);
@@ -293,8 +303,8 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case WM_CONTEXTMENU: {
       if ((HWND)wp != g_list) break;
       POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) }; LVHITTESTINFO ht = {0}; ht.pt = pt; ScreenToClient(g_list, &ht.pt);
-      if (ListView_HitTest(g_list, &ht) < 0) break;
-      int idx = ListView_GetNextItem(g_list, -1, LVNI_SELECTED); if (idx < 0) break;
+      int idx = ListView_HitTest(g_list, &ht); if (idx < 0) break;
+      ListView_SetItemState(g_list, idx, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
       Client* c = ClientAt(idx); if (!c) break;
       HMENU menu = CreatePopupMenu();
       for (auto& mi : kMenu) AppendMenuA(menu, mi.text ? MF_STRING : MF_SEPARATOR, mi.id, mi.text);
@@ -312,7 +322,9 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
           MessageBoxA(h, "bind/listen failed", "Error", MB_ICONERROR); closesocket(g_listenSock);
           InterlockedExchange(&g_listening, 0); return 0;
         }
-        if (ai) freeaddrinfo(ai); CreateThread(NULL, 0, AcceptThread, NULL, 0, NULL);
+        if (ai) freeaddrinfo(ai);
+        HANDLE th = CreateThread(NULL, 0, AcceptThread, NULL, 0, NULL); if (th) CloseHandle(th);
+        else { closesocket(g_listenSock); g_listenSock = INVALID_SOCKET; InterlockedExchange(&g_listening, 0); MessageBoxA(h, "cannot start accept thread", "Error", MB_ICONERROR); return 0; }
         SendMessage(g_status, SB_SETTEXTA, 0, (LPARAM)"listening"); return 0;
       }
       int idx = ListView_GetNextItem(g_list, -1, LVNI_SELECTED); if (idx < 0) return 0;
@@ -338,12 +350,13 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
 }
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
   g_inst = inst; InitializeCriticalSection(&g_cs);
-  WSADATA w; WSAStartup(MAKEWORD(2, 2), &w); InitCommonControls();
+  WSADATA w; if (WSAStartup(MAKEWORD(2, 2), &w)) return 1; InitCommonControls();
   if (!LoadPfx("cert.pfx")) { MessageBoxA(NULL, "Failed to load cert.pfx", "Error", MB_ICONERROR); return 1; }
   WNDCLASSA wc = {0}; wc.lpfnWndProc = MainProc; wc.hInstance = inst;
   wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
   wc.lpszClassName = "OpenAssistPanel"; wc.hIcon = LoadIcon(NULL, IDI_APPLICATION); RegisterClassA(&wc);
   g_main = CreateWindowExA(0, "OpenAssistPanel", "System Assistant Panel", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 860, 480, NULL, NULL, inst, NULL);
+  if (!g_main) return 1;
   CreateWindowExA(0, "STATIC", "Agents connect to you.", WS_CHILD | WS_VISIBLE, 10, 8, 300, 18, g_main, NULL, inst, NULL);
   g_port = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "8443", WS_CHILD | WS_VISIBLE | ES_NUMBER, 0, 0, 60, 22, g_main, (HMENU)IDC_PORT, inst, NULL);
   CreateWindowExA(0, "BUTTON", "Start listening", WS_CHILD | WS_VISIBLE, 0, 0, 170, 26, g_main, (HMENU)IDC_LISTEN, inst, NULL);
