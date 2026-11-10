@@ -46,7 +46,7 @@ If `make` is not installed, build directly:
 x86_64-w64-mingw32-g++ -std=c++17 -Os -s -Wall -Wno-unused-value -DNOMINMAX ^
   -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti ^
   panel/panel.cpp -o panel.exe -static -mwindows -Wl,--gc-sections ^
-  -lws2_32 -lsecur32 -lcrypt32 -lcomctl32 -lcomdlg32 -lgdi32 -luxtheme
+  -lws2_32 -lsecur32 -lcrypt32 -lcomctl32 -lgdi32
 ```
 
 Use the same command with `agent/agent.cpp -o agent.exe` to build the agent.

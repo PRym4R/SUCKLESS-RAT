@@ -1,9 +1,7 @@
 #include "../common/proto.h"
 #include "../common/tls.h"
 #include <commctrl.h>
-#include <commdlg.h>
 #include <windowsx.h>
-#include <uxtheme.h>
 #include <stdio.h>
 
 struct Client {
@@ -24,11 +22,6 @@ static SOCKET g_listenSock = INVALID_SOCKET;
 static PCCERT_CONTEXT g_cert = NULL;
 static HCERTSTORE g_store = NULL;
 
-static HBRUSH g_bgBrush = NULL, g_editBrush = NULL;
-static HFONT g_hFont = NULL;
-static COLORREF g_textColor = RGB(232, 232, 232);
-static COLORREF g_bgColor = RGB(0, 0, 0);
-
 static void WriteFileAll(const char* p, const char* d, uint32_t dLen) {
   HANDLE f = CreateFileA(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
   if (f == INVALID_HANDLE_VALUE) return;
@@ -48,42 +41,6 @@ static bool LoadPfx(const char* path) {
   if (!g_store) return false;
   g_cert = CertFindCertificateInStore(g_store, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0, CERT_FIND_ANY, NULL, NULL);
   return g_cert != NULL;
-}
-
-static void ApplyFont(HWND h) {
-  EnumChildWindows(h, [](HWND child, LPARAM lParam) -> BOOL {
-    SendMessageA(child, WM_SETFONT, (WPARAM)lParam, TRUE);
-    return TRUE;
-  }, (LPARAM)g_hFont);
-}
-
-static void DrawDarkButton(const DRAWITEMSTRUCT* dis) {
-  if (!dis || dis->CtlType != ODT_BUTTON) return;
-  const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
-  const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
-  const COLORREF face = disabled ? RGB(12, 12, 12) : pressed ? RGB(38, 38, 38) : RGB(20, 20, 20);
-  const COLORREF edge = RGB(78, 78, 78);
-  const COLORREF text = disabled ? RGB(105, 105, 105) : g_textColor;
-  HBRUSH faceBrush = CreateSolidBrush(face), edgeBrush = CreateSolidBrush(edge);
-  FillRect(dis->hDC, &dis->rcItem, faceBrush); FrameRect(dis->hDC, &dis->rcItem, edgeBrush);
-  DeleteObject(faceBrush); DeleteObject(edgeBrush);
-  char caption[256] = {0}; GetWindowTextA(dis->hwndItem, caption, sizeof(caption));
-  SetBkMode(dis->hDC, TRANSPARENT); SetTextColor(dis->hDC, text);
-  HFONT font = (HFONT)SendMessageA(dis->hwndItem, WM_GETFONT, 0, 0);
-  HGDIOBJ oldFont = font ? SelectObject(dis->hDC, font) : NULL;
-  RECT textRc = dis->rcItem; InflateRect(&textRc, -5, -2);
-  DrawTextA(dis->hDC, caption, -1, &textRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-  if (oldFont) SelectObject(dis->hDC, oldFont);
-}
-
-static LRESULT HandleListCustomDraw(LPNMHDR nm, HWND list) {
-    if (!nm || !list || nm->code != NM_CUSTOMDRAW || nm->hwndFrom != list) return CDRF_DODEFAULT;
-    NMLVCUSTOMDRAW* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(nm);
-    if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
-    if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-        cd->clrText = g_textColor; cd->clrTextBk = g_bgColor; return CDRF_NEWFONT;
-    }
-    return CDRF_DODEFAULT;
 }
 
 static void AppendEdit(HWND ed, const char* s, size_t len) {
@@ -293,7 +250,6 @@ static void ChildPaint(Client* c, HWND h) {
     SetStretchBltMode(dc, HALFTONE);
     StretchDIBits(dc, 0, 0, rc.right, rc.bottom, 0, 0, bi->bmiHeader.biWidth, bi->bmiHeader.biHeight, px, bi, DIB_RGB_COLORS, SRCCOPY);
   } else {
-    SetTextColor(dc, g_textColor);
     TextOutA(dc, 10, 10, "no screenshot yet", 17);
   }
   EndPaint(h, &ps);
@@ -304,19 +260,6 @@ static LRESULT CALLBACK ChildProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   Client* c = ch ? ch->c : NULL;
   switch (m) {
     case WM_SIZE: if (ch) ChildLayout(h, ch->kind, LOWORD(lp), HIWORD(lp)); return 0;
-    case WM_CTLCOLOREDIT: case WM_CTLCOLORSTATIC: {
-      HDC dc = (HDC)wp; SetTextColor(dc, g_textColor); SetBkColor(dc, g_bgColor);
-      return (LRESULT)g_editBrush;
-    }
-    case WM_DRAWITEM:
-      if (ch && (ch->kind == K_SHELL || ch->kind == K_FILES)) { DrawDarkButton((const DRAWITEMSTRUCT*)lp); return TRUE; }
-      break;
-    case WM_NOTIFY:
-      if (ch && ch->kind == K_FILES) {
-        LRESULT r = HandleListCustomDraw((LPNMHDR)lp, c ? c->filesList : NULL);
-        if (r) return r;
-      }
-      break;
     case WM_COMMAND:
       if (ch) ChildCommand(ch, h, LOWORD(wp));
       return 0;
@@ -341,13 +284,12 @@ static LRESULT CALLBACK ChildProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
 
 static HWND MakeChild(const char* cls, const char* title, int kind, Client* c, int w, int h) {
   WNDCLASSA wc = {0}; wc.lpfnWndProc = ChildProc; wc.hInstance = g_inst;
-  wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = g_bgBrush;
+  wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
   wc.lpszClassName = cls;
   RegisterClassA(&wc);
   HWND wnd = CreateWindowExA(0, cls, title, WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, w, h, g_main, NULL, g_inst, NULL);
   Child* ch = (Child*)malloc(sizeof(Child));
   if (wnd && ch) { ch->c = c; ch->kind = kind; SetWindowLongPtrA(wnd, GWLP_USERDATA, (LONG_PTR)ch); }
-  ApplyFont(wnd);
   return wnd;
 }
 
@@ -357,9 +299,9 @@ static void OpenShell(Client* c) {
   HWND h = MakeChild("OAShell", title, K_SHELL, c, 720, 500);
   CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | ES_READONLY, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL);
   CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 100, 24, h, (HMENU)IDC_SHELLIN, g_inst, NULL);
-  CreateWindowExA(0, "BUTTON", "Send", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 78, 24, h, (HMENU)IDC_SHELLSEND, g_inst, NULL);
+  CreateWindowExA(0, "BUTTON", "Send", WS_CHILD | WS_VISIBLE, 0, 0, 78, 24, h, (HMENU)IDC_SHELLSEND, g_inst, NULL);
   c->shellWnd = h; c->shellOut = GetDlgItem(h, 1);
-  ApplyFont(h); RECT rc; GetClientRect(h, &rc);
+  RECT rc; GetClientRect(h, &rc);
   SendMessageA(h, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
   TlsSendMsg(&c->tls, C_SHELL_START, NULL, 0);
 }
@@ -373,17 +315,15 @@ static void OpenFiles(Client* c) {
   char title[512]; sprintf(title, "Files - %s", c->host);
   HWND h = MakeChild("OAFiles", title, K_FILES, c, 760, 520);
   CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "C:\\", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 100, 24, h, (HMENU)IDC_FPATH, g_inst, NULL);
-  CreateWindowExA(0, "BUTTON", "Refresh", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 84, 24, h, (HMENU)IDC_FREFRESH, g_inst, NULL);
+  CreateWindowExA(0, "BUTTON", "Refresh", WS_CHILD | WS_VISIBLE, 0, 0, 84, 24, h, (HMENU)IDC_FREFRESH, g_inst, NULL);
   HWND lv = CreateWindowExA(0, WC_LISTVIEWA, "", WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL);
-  SetWindowTheme(lv, L"", L""); SetWindowTheme(ListView_GetHeader(lv), L"", L"");
   ListView_SetExtendedListViewStyle(lv, LVS_EX_FULLROWSELECT);
-  ListView_SetBkColor(lv, g_bgColor); ListView_SetTextBkColor(lv, g_bgColor); ListView_SetTextColor(lv, g_textColor);
   LVCOLUMNA col = {0}; col.mask = LVCF_TEXT | LVCF_WIDTH; col.pszText = (LPSTR)"Name"; col.cx = 300; ListView_InsertColumn(lv, 0, &col);
   col.pszText = (LPSTR)"Size|Attr"; col.cx = 160; ListView_InsertColumn(lv, 1, &col);
-  CreateWindowExA(0, "BUTTON", "Download", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 90, 24, h, (HMENU)IDC_FGET, g_inst, NULL);
-  CreateWindowExA(0, "BUTTON", "Upload", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 90, 24, h, (HMENU)IDC_FPUT, g_inst, NULL);
+  CreateWindowExA(0, "BUTTON", "Download", WS_CHILD | WS_VISIBLE, 0, 0, 90, 24, h, (HMENU)IDC_FGET, g_inst, NULL);
+  CreateWindowExA(0, "BUTTON", "Upload", WS_CHILD | WS_VISIBLE, 0, 0, 90, 24, h, (HMENU)IDC_FPUT, g_inst, NULL);
   c->filesWnd = h; c->filesList = lv;
-  ApplyFont(h); RECT rc; GetClientRect(h, &rc);
+  RECT rc; GetClientRect(h, &rc);
   SendMessageA(h, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
   SendMessage(GetDlgItem(h, IDC_FREFRESH), BM_CLICK, 0, 0);
 }
@@ -398,7 +338,7 @@ static void OpenInfo(Client* c) {
   HWND h = MakeChild("OAInfo", title, K_INFO, c, 480, 360);
   c->infoWnd = h;
   c->infoText = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "requesting...", WS_CHILD | WS_VISIBLE | ES_MULTILINE | WS_VSCROLL | ES_READONLY, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL);
-  ApplyFont(h); RECT rc; GetClientRect(h, &rc);
+  RECT rc; GetClientRect(h, &rc);
   SendMessageA(h, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
   TlsSendMsg(&c->tls, C_SYSINFO, NULL, 0);
 }
@@ -427,12 +367,6 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
       if (g_status) MoveWindow(g_status, 0, (ht > statusH) ? ht - statusH : 0, w, statusH, TRUE);
       return 0;
     }
-    case WM_ERASEBKGND: { RECT rc; GetClientRect(h, &rc); FillRect((HDC)wp, &rc, g_bgBrush); return 1; }
-    case WM_DRAWITEM: if (wp == IDC_LISTEN) { DrawDarkButton((const DRAWITEMSTRUCT*)lp); return TRUE; } break;
-    case WM_CTLCOLOREDIT: case WM_CTLCOLORSTATIC: {
-      HDC dc = (HDC)wp; SetTextColor(dc, g_textColor); SetBkColor(dc, g_bgColor);
-      return (LRESULT)g_editBrush;
-    }
     case WM_CONTEXTMENU: {
       if ((HWND)wp != g_list) break;
       POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
@@ -450,12 +384,6 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
       AppendMenuA(menu, MF_STRING, IDM_DROP, "Disconnect client");
       TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, h, NULL);
       DestroyMenu(menu); return 0;
-    }
-    case WM_NOTIFY: {
-      LPNMHDR nm = (LPNMHDR)lp;
-      LRESULT drawResult = HandleListCustomDraw(nm, g_list);
-      if (drawResult) return drawResult;
-      break;
     }
     case WM_COMMAND: {
       if (LOWORD(wp) == IDC_LISTEN) {
@@ -498,14 +426,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
   WSADATA w; WSAStartup(MAKEWORD(2, 2), &w);
   InitCommonControls();
 
-  g_bgBrush = CreateSolidBrush(g_bgColor);
-  g_editBrush = CreateSolidBrush(g_bgColor);
-  g_hFont = CreateFontA(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, "Consolas");
-
   if (!LoadPfx("cert.pfx")) { MessageBoxA(NULL, "Failed to load cert.pfx", "Error", MB_ICONERROR); return 1; }
 
   WNDCLASSA wc = {0}; wc.lpfnWndProc = MainProc; wc.hInstance = inst;
-  wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = g_bgBrush;
+  wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
   wc.lpszClassName = "OpenAssistPanel"; wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
   RegisterClassA(&wc);
 
@@ -513,19 +437,16 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
 
   CreateWindowExA(0, "STATIC", "Agents connect to you.", WS_CHILD | WS_VISIBLE, 10, 8, 300, 18, g_main, NULL, inst, NULL);
   g_port = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "8443", WS_CHILD | WS_VISIBLE | ES_NUMBER, 0, 0, 60, 22, g_main, (HMENU)IDC_PORT, inst, NULL);
-  CreateWindowExA(0, "BUTTON", "Start listening", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 170, 26, g_main, (HMENU)IDC_LISTEN, inst, NULL);
+  CreateWindowExA(0, "BUTTON", "Start listening", WS_CHILD | WS_VISIBLE, 0, 0, 170, 26, g_main, (HMENU)IDC_LISTEN, inst, NULL);
 
   g_list = CreateWindowExA(0, WC_LISTVIEWA, "", WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS, 0, 36, 800, 300, g_main, (HMENU)IDC_LIST, inst, NULL);
-  SetWindowTheme(g_list, L"", L""); SetWindowTheme(ListView_GetHeader(g_list), L"", L"");
   ListView_SetExtendedListViewStyle(g_list, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
-  ListView_SetBkColor(g_list, g_bgColor); ListView_SetTextBkColor(g_list, g_bgColor); ListView_SetTextColor(g_list, g_textColor);
 
   struct { const char* t; int cx; } cols[] = { {"Host", 160}, {"User", 140}, {"OS", 120}, {"Addr", 160} };
   LVCOLUMNA col = {0}; col.mask = LVCF_TEXT | LVCF_WIDTH;
   for (int i = 0; i < 4; i++) { col.pszText = (LPSTR)cols[i].t; col.cx = cols[i].cx; ListView_InsertColumn(g_list, i, &col); }
 
   g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "idle", WS_CHILD | WS_VISIBLE, 0, 0, 800, 22, g_main, NULL, inst, NULL);
-  ApplyFont(g_main);
 
   RECT clientRc; GetClientRect(g_main, &clientRc);
   SendMessageA(g_main, WM_SIZE, 0, MAKELPARAM(clientRc.right, clientRc.bottom));
