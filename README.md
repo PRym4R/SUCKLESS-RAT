@@ -68,7 +68,7 @@ Put `cert.pfx` next to `panel.exe`. Certificates and keys are git-ignored - neve
 ## Usage
 
 1. Operator: run `panel.exe`, click **Start listening** (default port `8443`).
-2. Target: run `agent.exe 192.168.1.100:8443`.
+2. Target: set the panel address in `kServer` at the top of `agent/agent.cpp` (`"192.168.1.100:8443"`), rebuild, then just run `agent.exe`. A `host:port` argument still overrides it for testing.
 3. Right-click the session to open shell, files, system info or a screenshot.
 
 ## Security

