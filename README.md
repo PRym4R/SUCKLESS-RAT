@@ -76,6 +76,7 @@ Put `cert.pfx` next to `panel.exe`. Certificates and keys are git-ignored - neve
 - Traffic is encrypted with SChannel TLS 1.2. The agent pins the panel certificate: it accepts only the exact certificate whose SHA-256 is in `kPin` in `agent/agent.cpp`. If you regenerate `cert.pem`/`cert.pfx`, update that constant, otherwise the agent will refuse to connect.
 - There is still no user authentication: anyone who holds the panel certificate (or connects from a machine where the agent runs) is trusted at the transport level. Do not expose the panel to the internet.
 - Downloaded files are written to `downloads\` under a sanitised base name; the agent reports unreadable or oversized (> 64 MB) files instead of failing silently.
+- On start the agent makes one HTTPS request to `api.country.is` to learn the public IP and country; no other traffic leaves the machine outside the panel connection.
 - Before using this outside a lab: add a shared secret and set socket receive timeouts.
 
 ## Disclaimer
