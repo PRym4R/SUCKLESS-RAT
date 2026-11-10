@@ -44,10 +44,10 @@ make clean && make
 If `make` is not installed, build directly:
 
 ```bat
-x86_64-w64-mingw32-g++ -std=c++17 -Os -s -Wall -Wno-unused-value -DNOMINMAX ^
+x86_64-w64-mingw32-g++ -std=c++17 -Os -s -Wall -Wno-unused-value -Wno-misleading-indentation -DNOMINMAX ^
   -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti ^
   panel/panel.cpp -o panel.exe -static -mwindows -Wl,--gc-sections ^
-  -lws2_32 -lsecur32 -lcrypt32 -lcomctl32 -lgdi32 -lwininet
+  -lws2_32 -lsecur32 -lcrypt32 -lcomctl32 -lgdi32 -lwininet -ladvapi32 -liphlpapi
 ```
 
 Use the same command with `agent/agent.cpp -o agent.exe` to build the agent.
@@ -73,8 +73,10 @@ Put `cert.pfx` next to `panel.exe`. Certificates and keys are git-ignored - neve
 
 ## Security
 
-- Traffic is encrypted, but the agent currently accepts **any** server certificate and there is **no authentication**. Do not expose the panel to the internet.
-- Before using this outside a lab: pin the panel certificate fingerprint in the agent, add a shared secret, and set socket receive timeouts.
+- Traffic is encrypted with SChannel TLS 1.2. The agent pins the panel certificate: it accepts only the exact certificate whose SHA-256 is in `kPin` in `agent/agent.cpp`. If you regenerate `cert.pem`/`cert.pfx`, update that constant, otherwise the agent will refuse to connect.
+- There is still no user authentication: anyone who holds the panel certificate (or connects from a machine where the agent runs) is trusted at the transport level. Do not expose the panel to the internet.
+- Downloaded files are written to `downloads\` under a sanitised base name; the agent reports unreadable or oversized (> 64 MB) files instead of failing silently.
+- Before using this outside a lab: add a shared secret and set socket receive timeouts.
 
 ## Disclaimer
 

