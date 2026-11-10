@@ -52,6 +52,11 @@ static void RawErase(TlsCtx* t, size_t count) {
   t->rawLen -= count;
 }
 
+static size_t ExtraLen(const SecBuffer* b, int n) {
+  for (int i = 0; i < n; i++) if (b[i].BufferType == SECBUFFER_EXTRA) return b[i].cbBuffer;
+  return 0;
+}
+
 static bool TlsAcquire(TlsCtx* t, PCCERT_CONTEXT cert) {
   SCHANNEL_CRED sc;
   memset(&sc, 0, sizeof(sc));
@@ -59,7 +64,6 @@ static bool TlsAcquire(TlsCtx* t, PCCERT_CONTEXT cert) {
   sc.dwFlags = SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_MANUAL_CRED_VALIDATION;
   sc.grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT | SP_PROT_TLS1_2_SERVER;
   if (cert) { sc.cCreds = 1; sc.paCred = &cert; }
-  else { sc.cCreds = 0; }
   TimeStamp ts;
   SECURITY_STATUS st = AcquireCredentialsHandleW(NULL, (SEC_WCHAR*)UNISP_NAME_W,
       cert ? SECPKG_CRED_INBOUND : SECPKG_CRED_OUTBOUND, NULL, &sc, NULL, NULL, &t->hcred, &ts);
@@ -98,17 +102,10 @@ static int HandshakeStep(TlsCtx* t, bool* moreWork) {
     st = AcceptSecurityContext(&t->hcred, t->haveCtx ? &t->hctx : NULL, &in, 0,
                                SECURITY_NATIVE_DREP, &t->hctx, &out, &attr, &ts);
   } else {
-    if (t->haveCtx) {
-      st = InitializeSecurityContextW(&t->hcred, &t->hctx, NULL,
-          ISC_REQ_STREAM | ISC_REQ_REPLAY_DETECT | ISC_REQ_SEQUENCE_DETECT |
-          ISC_REQ_CONFIDENTIALITY | ISC_REQ_MANUAL_CRED_VALIDATION,
-          0, SECURITY_NATIVE_DREP, &in, 0, &t->hctx, &out, &attr, &ts);
-    } else {
-      st = InitializeSecurityContextW(&t->hcred, NULL, NULL,
-          ISC_REQ_STREAM | ISC_REQ_REPLAY_DETECT | ISC_REQ_SEQUENCE_DETECT |
-          ISC_REQ_CONFIDENTIALITY | ISC_REQ_MANUAL_CRED_VALIDATION,
-          0, SECURITY_NATIVE_DREP, NULL, 0, &t->hctx, &out, &attr, &ts);
-    }
+    st = InitializeSecurityContextW(&t->hcred, t->haveCtx ? &t->hctx : NULL, NULL,
+        ISC_REQ_STREAM | ISC_REQ_REPLAY_DETECT | ISC_REQ_SEQUENCE_DETECT |
+        ISC_REQ_CONFIDENTIALITY | ISC_REQ_MANUAL_CRED_VALIDATION,
+        0, SECURITY_NATIVE_DREP, t->haveCtx ? &in : NULL, 0, &t->hctx, &out, &attr, &ts);
   }
   if (bout[0].cbBuffer > 0 && st != SEC_E_INCOMPLETE_MESSAGE) {
     if (!SendFull(t->sock, bout[0].pvBuffer, bout[0].cbBuffer)) {
@@ -120,15 +117,11 @@ static int HandshakeStep(TlsCtx* t, bool* moreWork) {
     // Keep bytes that follow the final handshake message (e.g. the agent's
     // C_HELLO record arriving in the same TCP segment). Dropping them loses
     // the first application message and the peer looks dead.
-    size_t extra = 0;
-    for (int i = 0; i < 2; i++) if (bin[i].BufferType == SECBUFFER_EXTRA) extra = bin[i].cbBuffer;
-    RawErase(t, t->rawLen - extra);
+    RawErase(t, t->rawLen - ExtraLen(bin, 2));
     t->haveCtx = true; return 1;
   }
   if (st == SEC_I_CONTINUE_NEEDED) {
-    size_t extra = 0;
-    for (int i = 0; i < 2; i++) if (bin[i].BufferType == SECBUFFER_EXTRA) extra = bin[i].cbBuffer;
-    RawErase(t, t->rawLen - extra);
+    RawErase(t, t->rawLen - ExtraLen(bin, 2));
     t->haveCtx = true; *moreWork = true; return 0;
   }
   if (st == SEC_E_INCOMPLETE_MESSAGE) return 0;
@@ -169,8 +162,7 @@ static bool TlsPump(TlsCtx* t) {
     }
     if (st != SEC_E_OK) return false;
 
-    size_t extra = 0;
-    for (int i = 0; i < 4; i++) if (bufs[i].BufferType == SECBUFFER_EXTRA) extra = bufs[i].cbBuffer;
+    size_t extra = ExtraLen(bufs, 4);
 
     for (int i = 0; i < 4; i++) {
       if (bufs[i].BufferType == SECBUFFER_DATA && bufs[i].cbBuffer > 0) {

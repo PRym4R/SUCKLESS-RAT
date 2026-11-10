@@ -3,14 +3,14 @@
 #   make all
 CXX      = x86_64-w64-mingw32-g++
 CXXFLAGS = -std=c++17 -Os -s -Wall -Wno-unused-value -DNOMINMAX -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti
-LIBS     = -static -mwindows -Wl,--gc-sections -lws2_32 -lsecur32 -lcrypt32 -lcomctl32 -lgdi32
+LIBS     = -static -mwindows -Wl,--gc-sections -lws2_32 -lsecur32 -lcrypt32 -lcomctl32 -lgdi32 -lwininet
 
 all: panel.exe agent.exe
 
-panel.exe: panel/panel.cpp common/proto.h common/tls.h
+panel.exe: panel/panel.cpp common/proto.h common/tls.h common/util.h
 	$(CXX) $(CXXFLAGS) panel/panel.cpp -o $@ $(LIBS)
 
-agent.exe: agent/agent.cpp common/proto.h common/tls.h
+agent.exe: agent/agent.cpp common/proto.h common/tls.h common/util.h
 	$(CXX) $(CXXFLAGS) agent/agent.cpp -o $@ $(LIBS)
 
 clean:

