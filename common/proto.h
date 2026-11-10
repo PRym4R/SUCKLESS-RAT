@@ -7,19 +7,9 @@
 #include <windows.h>
 
 enum Cmd : uint16_t {
-  C_HELLO = 1,
-  C_SYSINFO,
-  C_SHELL_START,
-  C_SHELL_CLOSE,
-  C_SHELL_DATA,
-  C_FS_LIST,
-  C_FS_LIST_RESP,
-  C_FS_GET,
-  C_FS_PUT,
-  C_FS_FILE,
-  C_SCREEN,
-  C_SCREEN_IMG,
-  C_BYE,
+  C_HELLO = 1, C_SYSINFO, C_SHELL_START, C_SHELL_CLOSE, C_SHELL_DATA,
+  C_FS_LIST, C_FS_LIST_RESP, C_FS_GET, C_FS_PUT, C_FS_FILE,
+  C_SCREEN, C_SCREEN_IMG, C_BYE,
 };
 
 static const uint32_t MAX_MSG = 64u * 1024 * 1024;
