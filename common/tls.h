@@ -93,7 +93,7 @@ static int HandshakeStep(TlsCtx* t, bool* moreWork) {
   if (st == SEC_E_INCOMPLETE_MESSAGE) return 0;
   if (!t->server && (st == SEC_E_UNTRUSTED_ROOT || st == SEC_E_WRONG_PRINCIPAL ||
                      st == CERT_E_CN_NO_MATCH || st == CERT_E_UNTRUSTEDROOT)) {
-    t->haveCtx = true; return 1;
+    RawErase(t, t->rawLen - ExtraLen(bin, 2)); t->haveCtx = true; return 1;
   }
   return -1;
 }
@@ -111,7 +111,7 @@ static bool TlsHandshake(TlsCtx* t, const unsigned char* pin = NULL) {
     if (!moreWork || t->rawLen == 0) if (RawRecv(t) < 0) return false;
   }
   if (QueryContextAttributesW(&t->hctx, SECPKG_ATTR_STREAM_SIZES, &t->sz) != SEC_E_OK) return false;
-  return !pin || TlsPinOk(t, pin);
+  return t->server || (pin && TlsPinOk(t, pin));
 }
 static bool TlsPump(TlsCtx* t) {
   for (;;) {
