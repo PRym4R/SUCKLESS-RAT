@@ -17,14 +17,11 @@ struct TlsCtx {
   CRITICAL_SECTION sendCs;
 };
 static void InitTlsCtx(TlsCtx* t, SOCKET s) {
-  memset(t, 0, sizeof(TlsCtx)); t->sock = s;
-  InitializeCriticalSection(&t->sendCs);
+  memset(t, 0, sizeof(TlsCtx)); t->sock = s; TuneSocket(s); InitializeCriticalSection(&t->sendCs);
 }
 static void FreeTlsCtx(TlsCtx* t) {
-  if (t->haveCtx) DeleteSecurityContext(&t->hctx);
-  if (t->haveCred) FreeCredentialsHandle(&t->hcred);
-  if (t->raw) free(t->raw);
-  if (t->dec) free(t->dec);
+  if (t->haveCtx) DeleteSecurityContext(&t->hctx); if (t->haveCred) FreeCredentialsHandle(&t->hcred);
+  if (t->raw) free(t->raw); if (t->dec) free(t->dec);
   DeleteCriticalSection(&t->sendCs);
 }
 static bool RawAppend(TlsCtx* t, const char* buf, size_t len) {
@@ -94,8 +91,7 @@ static int HandshakeStep(TlsCtx* t, bool* moreWork) {
 }
 static bool TlsPinOk(TlsCtx* t, const unsigned char* pin) {
   PCCERT_CONTEXT rc = NULL; if (QueryContextAttributesW(&t->hctx, SECPKG_ATTR_REMOTE_CERT_CONTEXT, &rc) != SEC_E_OK || !rc) return false;
-  unsigned char h[32]; DWORD hl = sizeof(h);
-  bool ok = CryptHashCertificate(0, CALG_SHA_256, 0, rc->pbCertEncoded, rc->cbCertEncoded, h, &hl) && hl == 32 && !memcmp(h, pin, 32);
+  unsigned char h[32]; DWORD hl = sizeof(h); bool ok = CryptHashCertificate(0, CALG_SHA_256, 0, rc->pbCertEncoded, rc->cbCertEncoded, h, &hl) && hl == 32 && !memcmp(h, pin, 32);
   CertFreeCertificateContext(rc); return ok;
 }
 static bool TlsHandshake(TlsCtx* t, const unsigned char* pin = NULL) {

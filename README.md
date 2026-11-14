@@ -79,7 +79,8 @@ Put `cert.pfx` next to `panel.exe`. Certificates and keys are git-ignored - neve
 - Do not expose the panel to the internet. There is still no per-user identity, no rate limiting and no audit log.
 - Downloaded files are written to `downloads\` under a sanitised base name; the agent reports unreadable or oversized (> 64 MB) files instead of failing silently.
 - On start the agent makes one HTTPS request to `api.country.is` to learn the public IP and country; no other traffic leaves the machine outside the panel connection.
-- Before using this outside a lab: set your own `kPsk`, keep the panel off the internet, and add socket receive timeouts.
+- Idle connections use TCP keepalive (10 s idle time, 3 s probes). A peer that stops responding is dropped after roughly 20 seconds, while a quiet but live session is left alone.
+- Before using this outside a lab: set your own `kPsk`, keep the panel off the internet, and add rate limiting.
 
 ## Disclaimer
 
