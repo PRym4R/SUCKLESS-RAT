@@ -1,4 +1,4 @@
-# OpenAssist — cross-build from Linux with MinGW-w64 (x86_64-w64-mingw32-g++)
+# sRAT — cross-build from Linux with MinGW-w64 (x86_64-w64-mingw32-g++)
 #   apt install mingw-w64
 #   make all
 CXX      = x86_64-w64-mingw32-g++

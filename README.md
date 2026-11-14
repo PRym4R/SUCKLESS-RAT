@@ -1,4 +1,4 @@
-# SUCKLESS-RAT
+# sRAT
 
 A minimal, self-hosted remote administration tool for Windows. Win32 UI + SChannel TLS 1.2, cross-compiled with MinGW-w64.
 
@@ -59,7 +59,7 @@ Outputs: `panel.exe`, `agent.exe`.
 The panel needs a TLS server certificate. Generate a self-signed one:
 
 ```sh
-openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 3650 -subj "/CN=OpenAssistPanel"
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 3650 -subj "/CN=sRATPanel"
 openssl pkcs12 -export -out cert.pfx -inkey key.pem -in cert.pem -passout pass:
 ```
 
