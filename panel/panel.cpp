@@ -123,9 +123,15 @@ static void SaveFile(Client* c, const char* pl, uint32_t plLen) {
   if (WriteFileAll(outPath, pl + off, dataLen)) MessageBoxA(c->wnd[K_FILES], outPath, "Saved", MB_ICONINFORMATION);
   else MessageBoxA(c->wnd[K_FILES], "Write failed", "Save", MB_ICONERROR);
 }
+static bool AuthClient(TlsCtx* t) {
+  unsigned char nonce[16] = {0}, want[32]; uint16_t cmd = 0; char* p = NULL; uint32_t n = 0; HCRYPTPROV h = 0;
+  bool seed = CryptAcquireContextA(&h, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT) && CryptGenRandom(h, 16, nonce); if (h) CryptReleaseContext(h, 0);
+  bool ok = seed && AuthProof(nonce, 16, want) && TlsSendMsg(t, C_AUTH, nonce, 16) && TlsRecvMsg(t, &cmd, &p, &n) && cmd == C_AUTH && n == 32 && p && !memcmp(p, want, 32);
+  free(p); return ok;
+}
 static DWORD WINAPI ClientThread(LPVOID p) {
   Client* c = (Client*)p;
-  if (!TlsAcquire(&c->tls, g_cert) || !TlsHandshake(&c->tls)) { closesocket(c->tls.sock); FreeTlsCtx(&c->tls); free(c); return 0; }
+  if (!TlsAcquire(&c->tls, g_cert) || !TlsHandshake(&c->tls) || !AuthClient(&c->tls)) { closesocket(c->tls.sock); FreeTlsCtx(&c->tls); free(c); return 0; }
   EnterCriticalSection(&g_cs);
   bool ok = g_clientCount < 256; if (ok) g_clients[g_clientCount++] = c;
   LeaveCriticalSection(&g_cs);

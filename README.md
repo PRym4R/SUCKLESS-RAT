@@ -9,6 +9,7 @@ A minimal, self-hosted remote administration tool for Windows. Win32 UI + SChann
 | Feature | Status |
 |---|---|
 | TLS 1.2 transport (SChannel) | yes |
+| Client authentication (shared secret, challenge-response) | yes |
 | Remote `cmd.exe` shell | yes |
 | File manager (list / get / put) | yes |
 | System info | yes |
@@ -74,10 +75,11 @@ Put `cert.pfx` next to `panel.exe`. Certificates and keys are git-ignored - neve
 ## Security
 
 - Traffic is encrypted with SChannel TLS 1.2. The agent pins the panel certificate: it accepts only the exact certificate whose SHA-256 is in `kPin` in `agent/agent.cpp`. If you regenerate `cert.pem`/`cert.pfx`, update that constant, otherwise the agent will refuse to connect.
-- There is still no user authentication: anyone who holds the panel certificate (or connects from a machine where the agent runs) is trusted at the transport level. Do not expose the panel to the internet.
+- Every connection is authenticated with a shared secret. Right after the TLS handshake the panel sends a random 16-byte nonce and the agent must reply with `SHA-256(secret || nonce)`; anything else is dropped before it can send a command. The secret is `kPsk` in `common/proto.h` - the value in the repository is a public placeholder, **change it before building** for your own deployment (both binaries embed it).
+- Do not expose the panel to the internet. There is still no per-user identity, no rate limiting and no audit log.
 - Downloaded files are written to `downloads\` under a sanitised base name; the agent reports unreadable or oversized (> 64 MB) files instead of failing silently.
 - On start the agent makes one HTTPS request to `api.country.is` to learn the public IP and country; no other traffic leaves the machine outside the panel connection.
-- Before using this outside a lab: add a shared secret and set socket receive timeouts.
+- Before using this outside a lab: set your own `kPsk`, keep the panel off the internet, and add socket receive timeouts.
 
 ## Disclaimer
 

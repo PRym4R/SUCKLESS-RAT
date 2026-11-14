@@ -3,7 +3,6 @@
 #define SECURITY_WIN32
 #include <security.h>
 #include <schannel.h>
-#include <wincrypt.h>
 #include <windows.h>
 #include <string.h>
 #include <stdlib.h>
@@ -30,19 +29,15 @@ static void FreeTlsCtx(TlsCtx* t) {
 }
 static bool RawAppend(TlsCtx* t, const char* buf, size_t len) {
   if (t->rawLen + len > t->rawCap) {
-    t->rawCap = (t->rawCap + len) * 2 + 1024;
-    char* p = (char*)realloc(t->raw, t->rawCap); if (!p) return false;
-    t->raw = p;
+    t->rawCap = (t->rawCap + len) * 2 + 1024; char* p = (char*)realloc(t->raw, t->rawCap); if (!p) return false; t->raw = p;
   }
   memcpy(t->raw + t->rawLen, buf, len); t->rawLen += len; return true;
 }
 static void RawErase(TlsCtx* t, size_t count) {
-  if (count >= t->rawLen) { t->rawLen = 0; return; }
-  memmove(t->raw, t->raw + count, t->rawLen - count); t->rawLen -= count;
+  if (count >= t->rawLen) { t->rawLen = 0; return; } memmove(t->raw, t->raw + count, t->rawLen - count); t->rawLen -= count;
 }
 static size_t ExtraLen(const SecBuffer* b, int n) {
-  for (int i = 0; i < n; i++) if (b[i].BufferType == SECBUFFER_EXTRA) return b[i].cbBuffer;
-  return 0;
+  for (int i = 0; i < n; i++) if (b[i].BufferType == SECBUFFER_EXTRA) return b[i].cbBuffer; return 0;
 }
 static bool TlsAcquire(TlsCtx* t, PCCERT_CONTEXT cert) {
   SCHANNEL_CRED sc; memset(&sc, 0, sizeof(sc));

