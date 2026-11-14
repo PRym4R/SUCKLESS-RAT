@@ -169,14 +169,18 @@ out:
 }
 static DWORD WINAPI AcceptThread(LPVOID) {
   for (;;) {
+    if (g_listening != 1) break;
+    fd_set f; FD_ZERO(&f); FD_SET(g_listenSock, &f); timeval tv = {0, 200000};
+    if (select(0, &f, NULL, NULL, &tv) <= 0) continue;
     SOCKET s = accept(g_listenSock, NULL, NULL);
-    if (s == INVALID_SOCKET) break;
+    if (s == INVALID_SOCKET) { if (g_listening != 1) break; continue; }
     Client* c = (Client*)calloc(1, sizeof(Client));
     if (!c) { closesocket(s); continue; }
     InitTlsCtx(&c->tls, s); HANDLE th = CreateThread(NULL, 0, ClientThread, c, 0, NULL);
     if (th) CloseHandle(th); else { closesocket(s); FreeTlsCtx(&c->tls); free(c); }
   }
-  return 0;
+  closesocket(g_listenSock); g_listenSock = INVALID_SOCKET; InterlockedExchange(&g_listening, 0);
+  PostMessageA(g_main, WM_APP + 3, 0, 0); return 0;
 }
 #define IDC_SHELLIN 201
 #define IDC_SHELLSEND 202
@@ -361,19 +365,21 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     }
     case WM_COMMAND: {
       if (LOWORD(wp) == IDC_LISTEN) {
-        if (InterlockedExchange(&g_listening, 1)) return 0;
+        if (g_listening == 1) { InterlockedExchange(&g_listening, 2); SendMessage(g_status, SB_SETTEXTA, 0, (LPARAM)"stopping"); return 0; }
+        if (g_listening || g_listenSock != INVALID_SOCKET) return 0;
         char port[16]; GetWindowTextA(g_port, port, sizeof(port));
         addrinfo* ai = NULL; addrinfo hints = {0}; hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM; hints.ai_flags = AI_PASSIVE;
         getaddrinfo(NULL, *port ? port : "8443", &hints, &ai);
         g_listenSock = socket(AF_INET, SOCK_STREAM, 0); int one = 1;
         setsockopt(g_listenSock, SOL_SOCKET, SO_REUSEADDR, (char*)&one, sizeof(one));
         if (bind(g_listenSock, ai ? ai->ai_addr : NULL, (int)(ai ? ai->ai_addrlen : sizeof(sockaddr_in))) || listen(g_listenSock, 16)) {
-          MessageBoxA(h, "bind/listen failed", "Error", MB_ICONERROR); closesocket(g_listenSock);
-          InterlockedExchange(&g_listening, 0); return 0;
+          MessageBoxA(h, "bind/listen failed", "Error", MB_ICONERROR); closesocket(g_listenSock); g_listenSock = INVALID_SOCKET; return 0;
         }
         if (ai) freeaddrinfo(ai);
+        InterlockedExchange(&g_listening, 1);
         HANDLE th = CreateThread(NULL, 0, AcceptThread, NULL, 0, NULL); if (th) CloseHandle(th);
         else { closesocket(g_listenSock); g_listenSock = INVALID_SOCKET; InterlockedExchange(&g_listening, 0); MessageBoxA(h, "cannot start accept thread", "Error", MB_ICONERROR); return 0; }
+        SetWindowTextA(GetDlgItem(h, IDC_LISTEN), "Stop listening");
         SendMessage(g_status, SB_SETTEXTA, 0, (LPARAM)"listening"); return 0;
       }
       int idx = ListView_GetNextItem(g_list, -1, LVNI_SELECTED); if (idx < 0) return 0;
@@ -393,6 +399,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
       if (c->wnd[K_SHOT]) { InvalidateRect(c->wnd[K_SHOT], NULL, TRUE); UpdateWindow(c->wnd[K_SHOT]); }
       return 0;
     }
+    case WM_APP + 3: SetWindowTextA(GetDlgItem(h, IDC_LISTEN), "Start listening"); SendMessage(g_status, SB_SETTEXTA, 0, (LPARAM)"idle"); return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
   }
   return DefWindowProcA(h, m, wp, lp);

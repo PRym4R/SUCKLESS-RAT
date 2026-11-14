@@ -2,7 +2,7 @@
 
 A minimal, self-hosted remote administration tool for Windows. Win32 UI + SChannel TLS 1.2, cross-compiled with MinGW-w64.
 
-**Status:** educational prototype. There is no authentication layer. Run it only on machines you own or have explicit permission to access.
+**Status:** educational prototype. Run it only on machines you own or have explicit permission to access.
 
 ## Features
 
@@ -17,6 +17,7 @@ A minimal, self-hosted remote administration tool for Windows. Win32 UI + SChann
 | Hidden background agent | yes |
 | Agent auto-reconnect after panel restart | yes |
 | Client list shows Windows version and country (public IP) | yes |
+| Start/stop listening without restarting the panel | yes |
 
 ## Architecture
 
@@ -68,7 +69,7 @@ Put `cert.pfx` next to `panel.exe`. Certificates and keys are git-ignored - neve
 
 ## Usage
 
-1. Operator: run `panel.exe`, click **Start listening** (default port `8443`).
+1. Operator: run `panel.exe`, click **Start listening** (default port `8443`). The button becomes **Stop listening**: it closes the port to new clients but leaves connected sessions running, and the same button starts listening again on the same port.
 2. Target: set the panel address in `kServer` at the top of `agent/agent.cpp` (`"192.168.1.100:8443"`), rebuild, then just run `agent.exe`. A `host:port` argument still overrides it for testing.
 3. Right-click the session to open shell, files, system info or a screenshot.
 
