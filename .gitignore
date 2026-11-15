@@ -20,6 +20,11 @@ downloads/
 *.bak
 *~
 
+# Local editions and the scratch copy of the agent (not part of this repo)
+/asm/
+sRAT-Red-Edition/
+sRAT-Purple-Edition/
+
 # Editor / OS cruft
 .vscode/
 .idea/
