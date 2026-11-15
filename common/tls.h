@@ -58,12 +58,9 @@ static int HandshakeStep(TlsCtx* t, bool* moreWork) {
   *moreWork = false;
   SecBufferDesc in, out; SecBuffer bin[2], bout[1];
   memset(bin, 0, sizeof(bin)); memset(bout, 0, sizeof(bout));
-  bin[0].pvBuffer = t->rawLen ? t->raw : NULL; bin[0].cbBuffer = (unsigned long)t->rawLen; bin[0].BufferType = SECBUFFER_TOKEN;
-  bin[1].BufferType = SECBUFFER_EMPTY;
-  bout[0].BufferType = SECBUFFER_TOKEN; bout[0].cbBuffer = 12288; bout[0].pvBuffer = malloc(12288);
-  if (!bout[0].pvBuffer) return -1;
-  in.ulVersion = SECBUFFER_VERSION; in.cBuffers = 2; in.pBuffers = bin;
-  out.ulVersion = SECBUFFER_VERSION; out.cBuffers = 1; out.pBuffers = bout;
+  bin[0].pvBuffer = t->rawLen ? t->raw : NULL; bin[0].cbBuffer = (unsigned long)t->rawLen; bin[0].BufferType = SECBUFFER_TOKEN; bin[1].BufferType = SECBUFFER_EMPTY;
+  bout[0].BufferType = SECBUFFER_TOKEN; bout[0].cbBuffer = 12288; bout[0].pvBuffer = malloc(12288); if (!bout[0].pvBuffer) return -1;
+  in.ulVersion = SECBUFFER_VERSION; in.cBuffers = 2; in.pBuffers = bin; out.ulVersion = SECBUFFER_VERSION; out.cBuffers = 1; out.pBuffers = bout;
   DWORD attr = 0; TimeStamp ts; SECURITY_STATUS st;
   if (t->server) {
     st = AcceptSecurityContext(&t->hcred, t->haveCtx ? &t->hctx : NULL, &in, 0,
@@ -78,10 +75,7 @@ static int HandshakeStep(TlsCtx* t, bool* moreWork) {
       !SendFull(t->sock, bout[0].pvBuffer, bout[0].cbBuffer)) { free(bout[0].pvBuffer); return -1; }
   free(bout[0].pvBuffer);
   if (st == SEC_E_OK) { RawErase(t, t->rawLen - ExtraLen(bin, 2)); t->haveCtx = true; return 1; }
-  if (st == SEC_I_CONTINUE_NEEDED) {
-    RawErase(t, t->rawLen - ExtraLen(bin, 2));
-    t->haveCtx = true; *moreWork = true; return 0;
-  }
+  if (st == SEC_I_CONTINUE_NEEDED) { RawErase(t, t->rawLen - ExtraLen(bin, 2)); t->haveCtx = true; *moreWork = true; return 0; }
   if (st == SEC_E_INCOMPLETE_MESSAGE) return 0;
   if (!t->server && (st == SEC_E_UNTRUSTED_ROOT || st == SEC_E_WRONG_PRINCIPAL ||
                      st == CERT_E_CN_NO_MATCH || st == CERT_E_UNTRUSTEDROOT)) {
@@ -107,20 +101,16 @@ static bool TlsHandshake(TlsCtx* t, const unsigned char* pin = NULL) {
 static bool TlsPump(TlsCtx* t) {
   for (;;) {
     if (t->rawLen == 0 && RawRecv(t) <= 0) return false;
-    SecBuffer bufs[4]; memset(bufs, 0, sizeof(bufs));
-    bufs[0].pvBuffer = t->raw; bufs[0].cbBuffer = (unsigned long)t->rawLen; bufs[0].BufferType = SECBUFFER_DATA;
+    SecBuffer bufs[4]; memset(bufs, 0, sizeof(bufs)); bufs[0].pvBuffer = t->raw; bufs[0].cbBuffer = (unsigned long)t->rawLen; bufs[0].BufferType = SECBUFFER_DATA;
     SecBufferDesc d = { SECBUFFER_VERSION, 4, bufs };
     SECURITY_STATUS st = DecryptMessage(&t->hctx, &d, 0, NULL);
-    if (st == SEC_E_INCOMPLETE_MESSAGE) { if (RawRecv(t) <= 0) return false; continue; }
-    if (st != SEC_E_OK) return false;
+    if (st == SEC_E_INCOMPLETE_MESSAGE) { if (RawRecv(t) <= 0) return false; continue; } if (st != SEC_E_OK) return false;
     size_t extra = ExtraLen(bufs, 4);
     for (int i = 0; i < 4; i++) {
       if (bufs[i].BufferType == SECBUFFER_DATA && bufs[i].cbBuffer > 0) {
-        size_t oldLen = t->decLen - t->decPos;
-        if (oldLen > 0) memmove(t->dec, t->dec + t->decPos, oldLen);
+        size_t oldLen = t->decLen - t->decPos; if (oldLen > 0) memmove(t->dec, t->dec + t->decPos, oldLen);
         char* p = (char*)realloc(t->dec, oldLen + bufs[i].cbBuffer); if (!p) return false;
-        t->dec = p; memcpy(t->dec + oldLen, bufs[i].pvBuffer, bufs[i].cbBuffer);
-        t->decLen = oldLen + bufs[i].cbBuffer; t->decPos = 0;
+        t->dec = p; memcpy(t->dec + oldLen, bufs[i].pvBuffer, bufs[i].cbBuffer); t->decLen = oldLen + bufs[i].cbBuffer; t->decPos = 0;
       }
     }
     RawErase(t, t->rawLen - extra);
