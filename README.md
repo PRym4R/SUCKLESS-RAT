@@ -10,6 +10,8 @@ A minimal, self-hosted remote administration tool for Windows. Win32 UI + SChann
 |---|---|
 | TLS 1.2 transport (SChannel) | yes |
 | Client authentication (shared secret, challenge-response) | yes |
+| Dead-peer detection (TCP keepalive, ~20 s) | yes |
+| Start/stop listening without restarting the panel | yes |
 | Remote `cmd.exe` shell | yes |
 | File manager (list / get / put) | yes |
 | System info | yes |
@@ -69,7 +71,7 @@ Put `cert.pfx` next to `panel.exe`. Certificates and keys are git-ignored - neve
 
 ## Usage
 
-1. Operator: run `panel.exe`, click **Start listening** (default port `8443`). The button becomes **Stop listening**: it closes the port to new clients but leaves connected sessions running, and the same button starts listening again on the same port.
+1. Operator: run `panel.exe`, click **Start listening** (default port `8443`). The same button stops accepting new agents; existing sessions stay connected. The button becomes **Stop listening**: it closes the port to new clients but leaves connected sessions running, and the same button starts listening again on the same port.
 2. Target: set the panel address in `kServer` at the top of `agent/agent.cpp` (`"192.168.1.100:8443"`), rebuild, then just run `agent.exe`. A `host:port` argument still overrides it for testing.
 3. Right-click the session to open shell, files, system info or a screenshot.
 
@@ -81,6 +83,7 @@ Put `cert.pfx` next to `panel.exe`. Certificates and keys are git-ignored - neve
 - Downloaded files are written to `downloads\` under a sanitised base name; the agent reports unreadable or oversized (> 64 MB) files instead of failing silently.
 - On start the agent makes one HTTPS request to `api.country.is` to learn the public IP and country; no other traffic leaves the machine outside the panel connection.
 - Idle connections use TCP keepalive (10 s idle time, 3 s probes). A peer that stops responding is dropped after roughly 20 seconds, while a quiet but live session is left alone.
+- Idle sessions are never timed out. Vanished peers (network drop, no FIN) are detected by TCP keepalive: 10 s idle, then a probe every 3 s, so their threads exit after about 20 s instead of hanging forever.
 - Before using this outside a lab: set your own `kPsk`, keep the panel off the internet, and add rate limiting.
 
 ## Disclaimer
